@@ -51,10 +51,13 @@ upload was interrupted; downloader treats the prefix as not-a-snapshot.
 ### Naming convention
 
 ```
-<role>-<scheme>-<block>-<YYYYMMDD>
+geth-<chainid>-<role>-<scheme>-<block>-<YYYYMMDD>
 ```
 
-- `role` ∈ `archive`, `full`, `snap`
+- `geth` is a fixed prefix marking the producing client; leaves room for
+  `reth-<chainid>-…` etc. should we ever share buckets across clients.
+- `chainid` is the EVM chain ID (`1` mainnet, `11155111` sepolia, …).
+- `role` ∈ `archive`, `full`
 - `scheme` ∈ `pbss`, `hbss`
 - `block` is the head block number at the moment geth was stopped
 - `YYYYMMDD` is UTC
@@ -62,8 +65,9 @@ upload was interrupted; downloader treats the prefix as not-a-snapshot.
 Examples:
 
 ```
-archive-pbss-23456789-20260430
-full-pbss-23456789-20260430
+geth-1-archive-pbss-23456789-20260430
+geth-1-full-pbss-23456789-20260430
+geth-11155111-full-pbss-7654321-20260430
 ```
 
 The same string is the directory name on the remote and the prefix used in any
@@ -89,7 +93,7 @@ on-disk layout.
 ```json
 {
   "version": 1,
-  "name": "archive-pbss-23456789-20260430",
+  "name": "geth-1-archive-pbss-23456789-20260430",
   "chain_id": 1,
   "role": "archive",
   "state_scheme": "path",
@@ -134,7 +138,7 @@ on-disk layout.
 }
 ```
 
-`contents` describes **what data the snapshot carries** (the ranges, the state
+`contents` is optional and describes **what data the snapshot carries** (the ranges, the state
 scheme, etc.) so a downloader can decide whether this snapshot is the right
 one for its target node mode without unpacking it. Optional sections are
 omitted when not present:
@@ -200,7 +204,7 @@ Subcommand groups per backend would clutter the CLI as we add more backends.
 ferry upload \
   --src /datadrive/geth \
   --dst 's3://geth-s3-storage/snapshots/?endpoint=s3.gra.io.cloud.ovh.net&region=gra' \
-  --name archive-pbss-23456789-20260430
+  --name geth-1-archive-pbss-23456789-20260430
 
 # credentials via standard env
 AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... ferry upload ...
@@ -287,7 +291,7 @@ ferry inspect  <local-or-remote>     # print manifest, no I/O on the parts
 ```
 upload:
   --name <name>              # required for now (autogen later from rawdb)
-  --role archive|full|snap   # required, goes into manifest + filename
+  --role archive|full        # required, goes into manifest + filename
   --scheme pbss|hbss         # required
   --block <n>                # required (head block at stop time)
   --codec zstd               # default zstd; lz4 not a write target
