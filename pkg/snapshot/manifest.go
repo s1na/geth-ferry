@@ -57,8 +57,10 @@ type Head struct {
 type PartKind string
 
 const (
-	PartChaindata PartKind = "chaindata"
-	PartTriedb    PartKind = "triedb"
+	PartChaindataLive PartKind = "chaindata-live"
+	PartAncientChain  PartKind = "ancient-chain"
+	PartAncientState  PartKind = "ancient-state"
+	PartTriedb        PartKind = "triedb"
 )
 
 type Part struct {

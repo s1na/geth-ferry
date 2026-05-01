@@ -40,29 +40,39 @@ A snapshot is a directory at a known prefix on the remote:
 ```
 s3://bucket/snapshots/<name>/
   manifest.json
-  parts/chaindata.tar.zst
-  parts/triedb.tar.zst       # only when <datadir>/geth/triedb/ exists (PBSS)
+  parts/chaindata-live.tar.zst    # always
+  parts/ancient-chain.tar.zst     # always
+  parts/ancient-state.tar.zst     # PBSS only (full or archive)
+  parts/triedb.tar.zst            # PBSS only
 ```
 
-That's the whole layout. At most two parts. `manifest.json` is written
-**last**, after both parts have uploaded and their sha256s are known. No
-manifest → upload was interrupted; downloader treats the prefix as
-not-a-snapshot.
+Up to four parts. `manifest.json` is written **last**, after every part
+has uploaded and its sha256 is known. No manifest → upload was interrupted;
+downloader treats the prefix as not-a-snapshot.
 
 ### What goes into each part
 
-`chaindata.tar.zst` is `tar -C <datadir>/geth -cf - chaindata`, streamed
-through zstd. This includes the entire freezer at
-`chaindata/ancient/{chain,state}/`, so headers/bodies/receipts/hashes/era1
-and (on archive nodes) the PBSS state-history tables travel inside this
-single tarball. We do not split by freezer table — geth's own
-`.cidx`/`.ridx`/`.meta` files already describe what's present, including
-the gaps that snap-synced/history-pruned nodes have.
+`chaindata-live.tar.zst` is the live pebble database — `tar -C <datadir>/geth -cf - chaindata`
+streamed through zstd, but with `chaindata/ancient/` excluded. This is the
+SST set, MANIFEST/CURRENT/OPTIONS bookkeeping, and the WAL `.log` files —
+i.e. the bytes geth's KV-store layer touches every block.
 
-`triedb.tar.zst` is `tar -C <datadir>/geth -cf - triedb`. It exists only
-when `<datadir>/geth/triedb/` is present on disk — this is the PBSS journal
-(`merkle.journal`). Without it geth rewinds to the last flushed state on
-restart, so it has to travel with the snapshot.
+`ancient-chain.tar.zst` is `chaindata/ancient/chain/` — the chain freezer
+(headers, bodies, receipts, hashes, optional era1 files). Always present.
+
+`ancient-state.tar.zst` is `chaindata/ancient/state/` — the PBSS state
+freezer (account.data, account.index, storage.data, storage.index,
+history.meta). Present on PBSS nodes; missing on HBSS.
+
+`triedb.tar.zst` is `<datadir>/geth/triedb/`. Exists only when the
+directory is present on disk — this is the PBSS journal (`merkle.journal`).
+Without it geth rewinds to the last flushed state on restart, so it has to
+travel with the snapshot.
+
+Before splitting, ferry checks that `chaindata/ancient/` contains nothing
+but the two known namespaces (`chain/`, `state/`). Any other entry is a
+sign of a geth version we don't understand; ferry refuses to upload rather
+than silently drop bytes.
 
 Everything else under `<datadir>/geth/` is left out by design: `LOCK`,
 `geth.ipc`, `blobpool/`, `nodes/`, `transactions.rlp`, `nodekey`,
@@ -122,18 +132,10 @@ above 5 is rarely worth it.
   "codec": "zstd",
   "level": 5,
   "parts": [
-    {
-      "name":              "parts/chaindata.tar.zst",
-      "uncompressed_size": 2700000000000,
-      "compressed_size":   2200000000000,
-      "sha256":            "…"
-    },
-    {
-      "name":              "parts/triedb.tar.zst",
-      "uncompressed_size": 484363426,
-      "compressed_size":   400000000,
-      "sha256":            "…"
-    }
+    { "name": "parts/chaindata-live.tar.zst", "kind": "chaindata-live", "uncompressed_size": 2400000000000, "compressed_size": 2000000000000, "sha256": "…" },
+    { "name": "parts/ancient-chain.tar.zst",  "kind": "ancient-chain",  "uncompressed_size":  280000000000, "compressed_size":  240000000000, "sha256": "…" },
+    { "name": "parts/ancient-state.tar.zst",  "kind": "ancient-state",  "uncompressed_size":   20000000000, "compressed_size":   18000000000, "sha256": "…" },
+    { "name": "parts/triedb.tar.zst",         "kind": "triedb",         "uncompressed_size":     484363426, "compressed_size":     460000000, "sha256": "…" }
   ]
 }
 ```

@@ -14,10 +14,20 @@ const (
 	// PartsDir is the prefix under a snapshot directory where part files live.
 	PartsDir = "parts"
 
-	// ChaindataPart is the path of the chaindata part within a snapshot.
-	ChaindataPart = "parts/chaindata.tar.zst"
+	// ChaindataLivePart holds the live pebble database — every file under
+	// <datadir>/geth/chaindata/ except the ancient/ subtree.
+	ChaindataLivePart = "parts/chaindata-live.tar.zst"
 
-	// TriedbPart is the path of the triedb part within a snapshot. Optional.
+	// AncientChainPart holds <datadir>/geth/chaindata/ancient/chain/.
+	// Always present (the chain freezer is required by every node mode).
+	AncientChainPart = "parts/ancient-chain.tar.zst"
+
+	// AncientStatePart holds <datadir>/geth/chaindata/ancient/state/.
+	// Optional: PBSS nodes have it (full or archive); HBSS nodes don't.
+	AncientStatePart = "parts/ancient-state.tar.zst"
+
+	// TriedbPart is the path of the triedb part within a snapshot.
+	// Optional: present only on PBSS nodes (carries merkle.journal).
 	TriedbPart = "parts/triedb.tar.zst"
 )
 

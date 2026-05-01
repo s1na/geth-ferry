@@ -15,6 +15,8 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/s1na/geth-ferry/pkg/backend"
@@ -94,24 +96,70 @@ func Run(ctx context.Context, dst backend.Backend, prefix string, opts Options) 
 		Level:       opts.Level,
 	}
 
-	// Always upload chaindata. Always exists on a stopped node.
-	chaindataPart, err := uploadPart(ctx, dst, partRequest{
+	if err := validateAncientLayout(filepath.Join(gethDir, "chaindata", "ancient")); err != nil {
+		return nil, err
+	}
+
+	// Live pebble: tar the chaindata/ tree but skip the ancient/ subtree —
+	// it goes into its own parts below.
+	livePart, err := uploadPart(ctx, dst, partRequest{
 		Prefix:   prefix,
 		Name:     opts.Name,
-		PartPath: snapshot.ChaindataPart,
-		Kind:     snapshot.PartChaindata,
+		PartPath: snapshot.ChaindataLivePart,
+		Kind:     snapshot.PartChaindataLive,
 		SrcRoot:  gethDir,
 		SrcSub:   "chaindata",
+		Skip: func(rel string) bool {
+			return rel == "chaindata/ancient" || strings.HasPrefix(rel, "chaindata/ancient/")
+		},
 		Level:    opts.Level,
 		Threads:  opts.Threads,
 		Progress: opts.Progress,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("upload chaindata: %w", err)
+		return nil, fmt.Errorf("upload chaindata-live: %w", err)
 	}
-	manifest.Parts = append(manifest.Parts, chaindataPart)
+	manifest.Parts = append(manifest.Parts, livePart)
 
-	// Upload triedb only if it exists on disk.
+	// Ancient chain freezer: always present.
+	chainPart, err := uploadPart(ctx, dst, partRequest{
+		Prefix:   prefix,
+		Name:     opts.Name,
+		PartPath: snapshot.AncientChainPart,
+		Kind:     snapshot.PartAncientChain,
+		SrcRoot:  gethDir,
+		SrcSub:   "chaindata/ancient/chain",
+		Level:    opts.Level,
+		Threads:  opts.Threads,
+		Progress: opts.Progress,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("upload ancient-chain: %w", err)
+	}
+	manifest.Parts = append(manifest.Parts, chainPart)
+
+	// Ancient state freezer: present on PBSS nodes (full or archive).
+	if _, err := os.Stat(filepath.Join(gethDir, "chaindata", "ancient", "state")); err == nil {
+		statePart, err := uploadPart(ctx, dst, partRequest{
+			Prefix:   prefix,
+			Name:     opts.Name,
+			PartPath: snapshot.AncientStatePart,
+			Kind:     snapshot.PartAncientState,
+			SrcRoot:  gethDir,
+			SrcSub:   "chaindata/ancient/state",
+			Level:    opts.Level,
+			Threads:  opts.Threads,
+			Progress: opts.Progress,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("upload ancient-state: %w", err)
+		}
+		manifest.Parts = append(manifest.Parts, statePart)
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("stat ancient/state: %w", err)
+	}
+
+	// Triedb: present only on PBSS nodes.
 	if _, err := os.Stat(filepath.Join(gethDir, "triedb")); err == nil {
 		triedbPart, err := uploadPart(ctx, dst, partRequest{
 			Prefix:   prefix,
@@ -183,6 +231,36 @@ func preflight(gethDir string, force bool) error {
 	return nil
 }
 
+// validateAncientLayout enforces that <chaindata>/ancient/ contains only
+// the two known freezer namespaces (chain/ and state/). Any extra entry is
+// a sign of a geth version we don't understand or a bytestream we'd silently
+// drop on the floor — fail fast rather than ship an incomplete snapshot.
+//
+// A missing ancient/ directory is fine (e.g. an empty/fresh datadir): the
+// caller's per-part stat checks handle that.
+func validateAncientLayout(ancientDir string) error {
+	entries, err := os.ReadDir(ancientDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read ancient/: %w", err)
+	}
+	allowed := map[string]bool{"chain": true, "state": true}
+	var unexpected []string
+	for _, e := range entries {
+		if !allowed[e.Name()] {
+			unexpected = append(unexpected, e.Name())
+		}
+	}
+	if len(unexpected) > 0 {
+		sort.Strings(unexpected)
+		return fmt.Errorf("ancient/ contains unexpected entries %v; ferry only knows about chain/ and state/. Refusing to upload an incomplete snapshot",
+			unexpected)
+	}
+	return nil
+}
+
 // detectStateScheme infers PBSS vs HBSS from the presence of triedb/.
 // We never write HBSS snapshots so the caller can rely on this for the
 // manifest's state_scheme field without an explicit flag.
@@ -198,10 +276,14 @@ func detectStateScheme(gethDir string) (snapshot.StateScheme, error) {
 type partRequest struct {
 	Prefix   string
 	Name     string
-	PartPath string // e.g. "parts/chaindata.tar.zst"
+	PartPath string // e.g. "parts/chaindata-live.tar.zst"
 	Kind     snapshot.PartKind
 	SrcRoot  string // e.g. <datadir>/geth
 	SrcSub   string // e.g. "chaindata"
+	// Skip, when non-nil, returns true for relative slash paths (relative to
+	// SrcRoot) that should be excluded. Returning true on a directory skips
+	// its entire subtree.
+	Skip     func(rel string) bool
 	Level    int
 	Threads  int
 	Progress io.Writer
@@ -241,7 +323,7 @@ func uploadPart(ctx context.Context, be backend.Backend, req partRequest) (snaps
 	uncompressedCounter := &countWriter{w: zstdEnc}
 	tw := tar.NewWriter(uncompressedCounter)
 
-	if err := tarTree(tw, req.SrcRoot, req.SrcSub); err != nil {
+	if err := tarTree(tw, req.SrcRoot, req.SrcSub, req.Skip); err != nil {
 		return snapshot.Part{}, err
 	}
 	if err := tw.Close(); err != nil {
@@ -266,7 +348,9 @@ func uploadPart(ctx context.Context, be backend.Backend, req partRequest) (snaps
 
 // tarTree writes srcRoot/srcSub recursively into tw, with tar entry names
 // rooted at srcSub (so "chaindata/MANIFEST-..." rather than the absolute path).
-func tarTree(tw *tar.Writer, srcRoot, srcSub string) error {
+// If skip is non-nil, paths for which it returns true are excluded; returning
+// true on a directory skips the entire subtree.
+func tarTree(tw *tar.Writer, srcRoot, srcSub string, skip func(rel string) bool) error {
 	root := filepath.Join(srcRoot, srcSub)
 	return filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -277,6 +361,13 @@ func tarTree(tw *tar.Writer, srcRoot, srcSub string) error {
 			return err
 		}
 		entryName := filepath.ToSlash(rel)
+
+		if skip != nil && skip(entryName) {
+			if d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
 
 		info, err := d.Info()
 		if err != nil {

@@ -22,12 +22,17 @@ A snapshot is a directory at a known prefix on the remote:
 ```
 s3://bucket/snapshots/<name>/
   manifest.json
-  parts/chaindata.tar.zst
-  parts/triedb.tar.zst       # only when <datadir>/geth/triedb/ exists (PBSS)
+  parts/chaindata-live.tar.zst    # always — live pebble (SSTs, MANIFEST, WAL)
+  parts/ancient-chain.tar.zst     # always — chain freezer
+  parts/ancient-state.tar.zst     # PBSS only — state freezer (account/storage)
+  parts/triedb.tar.zst            # PBSS only — merkle.journal
 ```
 
-`manifest.json` is written **last**, after both parts upload. No manifest →
-the snapshot is incomplete and downloaders should treat it as not-a-snapshot.
+`manifest.json` is written **last**, after every part has uploaded. No
+manifest → the snapshot is incomplete and downloaders should treat it as
+not-a-snapshot. Ferry refuses to upload if `chaindata/ancient/` contains
+anything other than `chain/` and `state/` — fail-fast on geth versions we
+don't understand.
 
 The snapshot name is `geth-<chainid>-<role>-<block>-<YYYYMMDD>` where
 `role` ∈ `archive`, `full`. Example: `geth-1-archive-23456789-20260430`.

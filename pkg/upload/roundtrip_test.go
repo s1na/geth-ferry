@@ -42,8 +42,26 @@ func TestRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("upload: %v", err)
 	}
-	if len(m.Parts) != 2 {
-		t.Fatalf("want 2 parts (chaindata + triedb), got %d: %+v", len(m.Parts), m.Parts)
+	// Expect: chaindata-live + ancient-chain + ancient-state + triedb.
+	if len(m.Parts) != 4 {
+		t.Fatalf("want 4 parts, got %d: %+v", len(m.Parts), m.Parts)
+	}
+	wantKinds := map[snapshot.PartKind]bool{
+		snapshot.PartChaindataLive: false,
+		snapshot.PartAncientChain:  false,
+		snapshot.PartAncientState:  false,
+		snapshot.PartTriedb:        false,
+	}
+	for _, p := range m.Parts {
+		if _, known := wantKinds[p.Kind]; !known {
+			t.Errorf("unexpected part kind %q", p.Kind)
+		}
+		wantKinds[p.Kind] = true
+	}
+	for k, seen := range wantKinds {
+		if !seen {
+			t.Errorf("missing part kind %q", k)
+		}
 	}
 	if m.StateScheme != snapshot.StateSchemePath {
 		t.Errorf("state scheme: got %q, want path", m.StateScheme)
@@ -70,9 +88,9 @@ func TestRoundTrip(t *testing.T) {
 	)
 }
 
-// TestRoundTripFullNode confirms that a node without triedb/ produces a
-// snapshot with exactly one part (chaindata) and round-trips cleanly.
-func TestRoundTripFullNode(t *testing.T) {
+// TestRoundTripHBSS confirms an HBSS-style node (no triedb/, no ancient/state/)
+// produces exactly two parts (live + ancient-chain) and round-trips cleanly.
+func TestRoundTripHBSS(t *testing.T) {
 	tmp := t.TempDir()
 	srcDataDir := filepath.Join(tmp, "src")
 	bucket := filepath.Join(tmp, "bucket")
@@ -80,8 +98,10 @@ func TestRoundTripFullNode(t *testing.T) {
 
 	gethDir := filepath.Join(srcDataDir, "geth")
 	mustMkdir(t, filepath.Join(gethDir, "chaindata"))
+	mustMkdir(t, filepath.Join(gethDir, "chaindata", "ancient", "chain"))
 	mustWrite(t, filepath.Join(gethDir, "chaindata", "MANIFEST-000001"), randomBytes(t, 1024))
 	mustWrite(t, filepath.Join(gethDir, "chaindata", "000001.sst"), randomBytes(t, 4096))
+	mustWrite(t, filepath.Join(gethDir, "chaindata", "ancient", "chain", "headers.0000.cdat"), randomBytes(t, 4*1024))
 
 	be, err := file.New(bucket)
 	if err != nil {
@@ -100,8 +120,8 @@ func TestRoundTripFullNode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("upload: %v", err)
 	}
-	if len(m.Parts) != 1 {
-		t.Fatalf("want 1 part, got %d: %+v", len(m.Parts), m.Parts)
+	if len(m.Parts) != 2 {
+		t.Fatalf("want 2 parts (live + ancient-chain), got %d: %+v", len(m.Parts), m.Parts)
 	}
 	if m.StateScheme != snapshot.StateSchemeHash {
 		t.Errorf("state scheme: got %q, want hash (no triedb/)", m.StateScheme)
@@ -117,6 +137,35 @@ func TestRoundTripFullNode(t *testing.T) {
 		filepath.Join(srcDataDir, "geth"),
 		filepath.Join(dstDataDir, "geth"),
 	)
+}
+
+// TestUploadRefusesUnexpectedAncientEntry guarantees the validator fails
+// fast when ancient/ contains anything besides chain/ and state/.
+func TestUploadRefusesUnexpectedAncientEntry(t *testing.T) {
+	tmp := t.TempDir()
+	srcDataDir := filepath.Join(tmp, "src")
+	bucket := filepath.Join(tmp, "bucket")
+
+	makeFakeDatadir(t, srcDataDir)
+	// Inject a rogue freezer namespace.
+	mustMkdir(t, filepath.Join(srcDataDir, "geth", "chaindata", "ancient", "logs"))
+	mustWrite(t, filepath.Join(srcDataDir, "geth", "chaindata", "ancient", "logs", "anything.cdat"), randomBytes(t, 1024))
+
+	be, err := file.New(bucket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = upload.Run(context.Background(), be, "", upload.Options{
+		DataDir: srcDataDir,
+		Name:    "geth-1-archive-100-20260430",
+		Role:    snapshot.RoleArchive,
+		Block:   100,
+		ChainID: 1,
+		Force:   true,
+	})
+	if err == nil {
+		t.Fatalf("expected upload to refuse unexpected ancient/ entry")
+	}
 }
 
 // TestUploadRefusesLockedDatadir confirms preflight refuses to run when
