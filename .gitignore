@@ -1,3 +1,4 @@
 /ferry
 *.test
 *.out
+.env
