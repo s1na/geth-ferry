@@ -1,0 +1,354 @@
+// Package upload implements the upload pipeline: for each snapshot part it
+// streams (tar -> zstd -> backend.Put) while computing sha256 and size
+// counters, then writes manifest.json last.
+package upload
+
+import (
+	"archive/tar"
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"path"
+	"path/filepath"
+	"time"
+
+	"github.com/s1na/geth-ferry/pkg/backend"
+	"github.com/s1na/geth-ferry/pkg/codec"
+	"github.com/s1na/geth-ferry/pkg/progress"
+	"github.com/s1na/geth-ferry/pkg/snapshot"
+)
+
+// Options configures an upload run.
+type Options struct {
+	// DataDir is the path to the geth datadir (the dir containing geth/, keystore/, …).
+	DataDir string
+
+	// Name is the snapshot identifier (e.g. geth-1-archive-23456789-20260430).
+	Name string
+
+	// Role and Block are recorded in the manifest.
+	Role  snapshot.Role
+	Block uint64
+
+	// ChainID is recorded in the manifest. 0 means "unset" (allowed for now;
+	// will default to mainnet when --chain-id flag plumbing lands).
+	ChainID uint64
+
+	// Level is the zstd encoder level. Zero falls back to codec.DefaultZstdLevel.
+	Level int
+
+	// Threads is the zstd encoder thread count. Zero uses the library default.
+	Threads int
+
+	// CreatedBy is recorded in the manifest. Default "ferry/<version>".
+	CreatedBy string
+
+	// Force skips the LOCK / .ipc safety check.
+	Force bool
+
+	// Progress, when non-nil, receives a label per part and a stream wrap
+	// callback. Used by the CLI to emit periodic "[label] X bytes, Y/s"
+	// lines on stderr. Tests typically leave this nil.
+	Progress io.Writer
+}
+
+// Run executes the upload to dst at prefix. prefix is the in-backend key
+// prefix returned by backend.Open; the snapshot's manifest and parts are
+// written under prefix/<name>/.
+func Run(ctx context.Context, dst backend.Backend, prefix string, opts Options) (*snapshot.Manifest, error) {
+	if err := opts.validate(); err != nil {
+		return nil, err
+	}
+	if opts.Level == 0 {
+		opts.Level = codec.DefaultZstdLevel
+	}
+	if opts.CreatedBy == "" {
+		opts.CreatedBy = "ferry/0.1.0"
+	}
+
+	gethDir := filepath.Join(opts.DataDir, "geth")
+	if err := preflight(gethDir, opts.Force); err != nil {
+		return nil, err
+	}
+
+	stateScheme, err := detectStateScheme(gethDir)
+	if err != nil {
+		return nil, err
+	}
+
+	manifest := &snapshot.Manifest{
+		Version:     snapshot.ManifestVersion,
+		Name:        opts.Name,
+		ChainID:     opts.ChainID,
+		Role:        opts.Role,
+		StateScheme: stateScheme,
+		Head:        snapshot.Head{Block: opts.Block},
+		CreatedAt:   time.Now().UTC(),
+		CreatedBy:   opts.CreatedBy,
+		Codec:       snapshot.CodecZstd,
+		Level:       opts.Level,
+	}
+
+	// Always upload chaindata. Always exists on a stopped node.
+	chaindataPart, err := uploadPart(ctx, dst, partRequest{
+		Prefix:   prefix,
+		Name:     opts.Name,
+		PartPath: snapshot.ChaindataPart,
+		Kind:     snapshot.PartChaindata,
+		SrcRoot:  gethDir,
+		SrcSub:   "chaindata",
+		Level:    opts.Level,
+		Threads:  opts.Threads,
+		Progress: opts.Progress,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("upload chaindata: %w", err)
+	}
+	manifest.Parts = append(manifest.Parts, chaindataPart)
+
+	// Upload triedb only if it exists on disk.
+	if _, err := os.Stat(filepath.Join(gethDir, "triedb")); err == nil {
+		triedbPart, err := uploadPart(ctx, dst, partRequest{
+			Prefix:   prefix,
+			Name:     opts.Name,
+			PartPath: snapshot.TriedbPart,
+			Kind:     snapshot.PartTriedb,
+			SrcRoot:  gethDir,
+			SrcSub:   "triedb",
+			Level:    opts.Level,
+			Threads:  opts.Threads,
+			Progress: opts.Progress,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("upload triedb: %w", err)
+		}
+		manifest.Parts = append(manifest.Parts, triedbPart)
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("stat triedb: %w", err)
+	}
+
+	if err := manifest.Validate(); err != nil {
+		return nil, fmt.Errorf("manifest invalid: %w", err)
+	}
+	if err := writeManifest(ctx, dst, prefix, opts.Name, manifest); err != nil {
+		return nil, fmt.Errorf("write manifest: %w", err)
+	}
+	return manifest, nil
+}
+
+func (o Options) validate() error {
+	if o.DataDir == "" {
+		return fmt.Errorf("DataDir is required")
+	}
+	if o.Name == "" {
+		return fmt.Errorf("Name is required")
+	}
+	if !o.Role.Valid() {
+		return fmt.Errorf("Role %q invalid", o.Role)
+	}
+	if _, err := snapshot.ParseName(o.Name); err != nil {
+		return err
+	}
+	return nil
+}
+
+// preflight refuses to upload when the node looks live, unless force is set.
+// LOCK, geth.ipc are the give-aways.
+func preflight(gethDir string, force bool) error {
+	if force {
+		return nil
+	}
+	for _, child := range []string{"LOCK", "geth.ipc"} {
+		p := filepath.Join(gethDir, child)
+		info, err := os.Stat(p)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return err
+		}
+		// LOCK exists when geth is running; size 0 either way, but pebble
+		// keeps a flock on it. We can't tell from userspace whether the
+		// flock is held without trying to acquire it, so be conservative:
+		// presence is enough to refuse without --force.
+		if info.Mode().IsRegular() || (info.Mode()&os.ModeSocket) != 0 {
+			return fmt.Errorf("preflight: %s exists; geth may be running. Stop geth or pass --force", p)
+		}
+	}
+	return nil
+}
+
+// detectStateScheme infers PBSS vs HBSS from the presence of triedb/.
+// We never write HBSS snapshots so the caller can rely on this for the
+// manifest's state_scheme field without an explicit flag.
+func detectStateScheme(gethDir string) (snapshot.StateScheme, error) {
+	if _, err := os.Stat(filepath.Join(gethDir, "triedb")); err == nil {
+		return snapshot.StateSchemePath, nil
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+	return snapshot.StateSchemeHash, nil
+}
+
+type partRequest struct {
+	Prefix   string
+	Name     string
+	PartPath string // e.g. "parts/chaindata.tar.zst"
+	Kind     snapshot.PartKind
+	SrcRoot  string // e.g. <datadir>/geth
+	SrcSub   string // e.g. "chaindata"
+	Level    int
+	Threads  int
+	Progress io.Writer
+}
+
+func uploadPart(ctx context.Context, be backend.Backend, req partRequest) (snapshot.Part, error) {
+	key := path.Join(req.Prefix, req.Name, req.PartPath)
+
+	bw, err := be.Put(ctx, key)
+	if err != nil {
+		return snapshot.Part{}, err
+	}
+	// On any error we close bw to release whatever resources it holds; on
+	// success we return the bw.Close error to the caller (so they see e.g.
+	// a multipart finalize failure).
+	closed := false
+	defer func() {
+		if !closed {
+			_ = bw.Close()
+		}
+	}()
+
+	hasher := sha256.New()
+	writers := []io.Writer{bw, hasher}
+	var tracker *progress.Tracker
+	if req.Progress != nil {
+		tracker = (&progress.Tracker{Label: string(req.Kind), Out: req.Progress}).Start()
+		defer tracker.Stop()
+		writers = append(writers, tracker.Writer())
+	}
+	compressedCounter := &countWriter{w: io.MultiWriter(writers...)}
+
+	zstdEnc, err := codec.NewZstdEncoder(compressedCounter, req.Level, req.Threads)
+	if err != nil {
+		return snapshot.Part{}, err
+	}
+	uncompressedCounter := &countWriter{w: zstdEnc}
+	tw := tar.NewWriter(uncompressedCounter)
+
+	if err := tarTree(tw, req.SrcRoot, req.SrcSub); err != nil {
+		return snapshot.Part{}, err
+	}
+	if err := tw.Close(); err != nil {
+		return snapshot.Part{}, fmt.Errorf("close tar: %w", err)
+	}
+	if err := zstdEnc.Close(); err != nil {
+		return snapshot.Part{}, fmt.Errorf("close zstd: %w", err)
+	}
+	closed = true
+	if err := bw.Close(); err != nil {
+		return snapshot.Part{}, fmt.Errorf("close backend writer: %w", err)
+	}
+
+	return snapshot.Part{
+		Name:             req.PartPath,
+		Kind:             req.Kind,
+		UncompressedSize: uncompressedCounter.n,
+		CompressedSize:   compressedCounter.n,
+		SHA256:           hex.EncodeToString(hasher.Sum(nil)),
+	}, nil
+}
+
+// tarTree writes srcRoot/srcSub recursively into tw, with tar entry names
+// rooted at srcSub (so "chaindata/MANIFEST-..." rather than the absolute path).
+func tarTree(tw *tar.Writer, srcRoot, srcSub string) error {
+	root := filepath.Join(srcRoot, srcSub)
+	return filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(srcRoot, p)
+		if err != nil {
+			return err
+		}
+		entryName := filepath.ToSlash(rel)
+
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+
+		var link string
+		if info.Mode()&os.ModeSymlink != 0 {
+			link, err = os.Readlink(p)
+			if err != nil {
+				return err
+			}
+		}
+
+		hdr, err := tar.FileInfoHeader(info, link)
+		if err != nil {
+			return err
+		}
+		hdr.Name = entryName
+		if d.IsDir() {
+			hdr.Name += "/"
+		}
+		// Strip uid/gid/uname/gname for reproducibility — these vary per host
+		// and aren't load-bearing for geth.
+		hdr.Uid = 0
+		hdr.Gid = 0
+		hdr.Uname = ""
+		hdr.Gname = ""
+
+		if err := tw.WriteHeader(hdr); err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		f, err := os.Open(p)
+		if err != nil {
+			return err
+		}
+		_, copyErr := io.Copy(tw, f)
+		if cerr := f.Close(); cerr != nil && copyErr == nil {
+			copyErr = cerr
+		}
+		return copyErr
+	})
+}
+
+func writeManifest(ctx context.Context, be backend.Backend, prefix, name string, m *snapshot.Manifest) error {
+	key := path.Join(prefix, name, snapshot.ManifestFilename)
+	w, err := be.Put(ctx, key)
+	if err != nil {
+		return err
+	}
+	var buf bytes.Buffer
+	if err := m.Encode(&buf); err != nil {
+		_ = w.Close()
+		return err
+	}
+	if _, err := io.Copy(w, &buf); err != nil {
+		_ = w.Close()
+		return err
+	}
+	return w.Close()
+}
+
+type countWriter struct {
+	w io.Writer
+	n int64
+}
+
+func (c *countWriter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.n += int64(n)
+	return n, err
+}
