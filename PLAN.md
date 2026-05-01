@@ -183,7 +183,7 @@ S3 `Put` uses the SDK's multipart uploader internally. Non-secret config
 goes on the URL query string:
 
 ```
-s3://bucket/snapshots/?endpoint=s3.gra.io.cloud.ovh.net&region=gra
+s3://bucket/snapshots/?endpoint=s3.de.io.cloud.ovh.net&region=de
 ```
 
 Credentials come from the standard AWS chain (env vars,

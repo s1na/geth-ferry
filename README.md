@@ -42,7 +42,7 @@ AWS_ACCESS_KEY_ID=...
 AWS_SECRET_ACCESS_KEY=...
 ferry upload \
   --src /datadrive/geth \
-  --dst 's3://geth-s3-storage/snapshots/?endpoint=s3.gra.io.cloud.ovh.net&region=gra' \
+  --dst 's3://geth-s3-storage/snapshots/?endpoint=s3.de.io.cloud.ovh.net&region=de' \
   --name geth-1-archive-23456789-20260430 \
   --role archive \
   --block 23456789 \
@@ -71,7 +71,7 @@ failed part over. Run inside `tmux` / `screen` like the legacy runbook does.
 
 ```
 ferry download \
-  --src 's3://geth-s3-storage/snapshots/geth-1-archive-23456789-20260430?endpoint=s3.gra.io.cloud.ovh.net&region=gra' \
+  --src 's3://geth-s3-storage/snapshots/geth-1-archive-23456789-20260430?endpoint=s3.de.io.cloud.ovh.net&region=de' \
   --dst /datadrive/geth
 ```
 
@@ -82,7 +82,7 @@ ends in `.tar.lz4` or `.tar.zst`:
 
 ```
 ferry download \
-  --src 's3://geth-s3-storage/archives/chaindata-23456789.tar.lz4?endpoint=s3.gra.io.cloud.ovh.net&region=gra' \
+  --src 's3://geth-s3-storage/archives/chaindata-23456789.tar.lz4?endpoint=s3.de.io.cloud.ovh.net&region=de' \
   --dst /datadrive/geth
 ```
 
@@ -121,12 +121,12 @@ profile).
 |-------------|---------|-------|
 | `endpoint` | (AWS) | hostname or full `https://...` URL |
 | `region` | (AWS_REGION) | bucket region |
-| `path_style` | `true` | virtual-hosted-style addressing; set `false` for native AWS |
+| `path_style` | `true` | path-style addressing (`endpoint/bucket/key`); set `false` for virtual-hosted-style (`bucket.endpoint/key`, native AWS) |
 
 Example for OVH:
 
 ```
-s3://geth-s3-storage/snapshots/?endpoint=s3.gra.io.cloud.ovh.net&region=gra
+s3://geth-s3-storage/snapshots/?endpoint=s3.de.io.cloud.ovh.net&region=de
 ```
 
 For native AWS S3, disable path-style addressing:
@@ -152,7 +152,7 @@ go test ./...
 To exercise the S3 backend against a real bucket, set `FERRY_S3_TEST_URL`:
 
 ```
-export FERRY_S3_TEST_URL='s3://my-bucket/ferry-test/?endpoint=s3.gra.io.cloud.ovh.net&region=gra'
+export FERRY_S3_TEST_URL='s3://my-bucket/ferry-test/?endpoint=s3.de.io.cloud.ovh.net&region=de'
 export AWS_ACCESS_KEY_ID=...
 export AWS_SECRET_ACCESS_KEY=...
 go test ./pkg/backend/s3/ -run TestRoundTripIntegration -v
