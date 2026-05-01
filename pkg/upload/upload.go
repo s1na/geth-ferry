@@ -88,7 +88,7 @@ func Run(ctx context.Context, dst backend.Backend, prefix string, opts Options) 
 		Role:        opts.Role,
 		StateScheme: stateScheme,
 		Head:        snapshot.Head{Block: opts.Block},
-		CreatedAt:   time.Now().UTC(),
+		CreatedAt:   time.Now().Unix(),
 		CreatedBy:   opts.CreatedBy,
 		Codec:       snapshot.CodecZstd,
 		Level:       opts.Level,

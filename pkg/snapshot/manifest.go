@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"time"
 )
 
 const ManifestVersion = 1
@@ -42,7 +41,7 @@ type Manifest struct {
 	Role        Role        `json:"role"`
 	StateScheme StateScheme `json:"state_scheme"`
 	Head        Head        `json:"head"`
-	CreatedAt   time.Time   `json:"created_at"`
+	CreatedAt   int64       `json:"created_at"` // Unix seconds (UTC)
 	CreatedBy   string      `json:"created_by"`
 	Codec       Codec       `json:"codec"`
 	Level       int         `json:"level"`

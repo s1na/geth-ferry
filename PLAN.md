@@ -92,11 +92,14 @@ part exists, and the manifest records it explicitly.
 
 ### Codec
 
-`zstd -13` for both parts. `chaindata/` is mostly snappy-compressed pebble
-SSTs and zstd-compressed `.cdat` freezer segments — pushing past 13 buys
-very little for a lot more CPU. The legacy runbook used 3; we move to 13
-because the producing host has cores to spare and bandwidth, not CPU, is
-the bottleneck. Level is configurable via `--level`.
+`zstd -5` for both parts. `chaindata/` is mostly snappy-compressed pebble
+SSTs and zstd-compressed `.cdat` freezer segments, so the ratio difference
+between zstd levels 3 and 9 on this data is consistently under 2%. We sit
+at the top of klauspost/compress's `SpeedDefault` band (zstd 3–5), which
+is the highest level that streams in parallel across cores — anything
+≥ 10 (`SpeedBestCompression`) is forced single-threaded by the library
+and runs ~10× slower. Level is configurable via `--level`, but going
+above 5 is rarely worth it.
 
 `lz4` is decode-only, for legacy single-file snapshots.
 
@@ -114,10 +117,10 @@ the bottleneck. Level is configurable via `--level`.
     "hash": "0x…",
     "timestamp": 1745923200
   },
-  "created_at": "2026-04-30T12:00:00Z",
+  "created_at": 1746014400,
   "created_by": "ferry/0.1.0",
   "codec": "zstd",
-  "level": 13,
+  "level": 5,
   "parts": [
     {
       "name":              "parts/chaindata.tar.zst",
@@ -207,7 +210,7 @@ ferry inspect  <local-or-remote>     # print manifest, no I/O on parts
 --name <name>              # required: geth-1-archive-23456789-20260430
 --role archive|full        # required
 --block <n>                # required (head block at stop time)
---level 13                 # zstd level, default 13
+--level 5                  # zstd level, default 5
 --threads <n>              # zstd encoder threads, default GOMAXPROCS
 --force                    # ignore presence of LOCK / geth.ipc
 ```

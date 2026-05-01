@@ -59,7 +59,7 @@ Flags:
 | `--role` | (required) | `archive` or `full` |
 | `--block` | (required) | head block at stop time |
 | `--chain-id` | `1` | EVM chain id |
-| `--level` | `13` | zstd level (1-22) |
+| `--level` | `5` | zstd level (1-22; ≥ 10 forces single-threaded streaming in klauspost/compress) |
 | `--threads` | GOMAXPROCS | zstd encoder threads |
 | `--force` | `false` | ignore preflight LOCK / .ipc check |
 | `--quiet` | `false` | suppress periodic progress output on stderr |

@@ -7,7 +7,17 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
-const DefaultZstdLevel = 13
+// DefaultZstdLevel is the streaming-encode level used when --level is unset.
+//
+// Level 5 is a deliberate choice. klauspost/compress's zstd encoder runs
+// streaming compression on a single goroutine for any level mapping to
+// EncoderLevelBestCompression (anything ≥ 10 in the SDK's zstd-level scale)
+// — which means default 13 caps real-world upload throughput at ~6 MiB/s
+// regardless of GOMAXPROCS. Levels ≤ 5 sit in SpeedDefault, which the
+// encoder will pipeline across cores. The compression-ratio difference on
+// a real geth datadir (mostly snappy-compressed pebble SSTs and zstd-compressed
+// freezer .cdat files) is well under 2% across this whole range.
+const DefaultZstdLevel = 5
 
 // NewZstdEncoder returns a writer that zstd-compresses to w at the given level
 // using the requested number of encoder threads (0 = library default).
