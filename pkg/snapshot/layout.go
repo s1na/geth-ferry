@@ -2,6 +2,7 @@ package snapshot
 
 import (
 	"fmt"
+	"net/url"
 	"path"
 	"regexp"
 	"strconv"
@@ -68,8 +69,14 @@ func Key(name, child string) string {
 }
 
 // IsLegacyURL reports whether src points at a single-file legacy snapshot
-// (suffix .tar.lz4 or .tar.zst), as opposed to a snapshot directory.
+// (suffix .tar.lz4 or .tar.zst), as opposed to a snapshot directory. The
+// check looks at the URL path component only, so query strings like
+// `?endpoint=...&region=...` don't defeat detection.
 func IsLegacyURL(src string) bool {
-	s := strings.ToLower(src)
+	pathPart := src
+	if u, err := url.Parse(src); err == nil && u.Path != "" {
+		pathPart = u.Path
+	}
+	s := strings.ToLower(pathPart)
 	return strings.HasSuffix(s, ".tar.lz4") || strings.HasSuffix(s, ".tar.zst")
 }

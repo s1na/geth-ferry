@@ -12,6 +12,8 @@
 package legacy
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -73,7 +75,48 @@ func Download(ctx context.Context, src backend.Backend, key string, opts Options
 	}
 	defer dec.Close()
 
-	return snapshot.Untar(dec, gethDir)
+	// Legacy snapshots come in two shapes:
+	//   1. tar entries rooted at "chaindata/..." — produced by the runbook
+	//      (`tar -C /datadrive/geth/geth -cf - chaindata`). These extract
+	//      cleanly into <datadir>/geth/.
+	//   2. tar entries flat (e.g. "000016.sst", "ancient/chain/..."), as in
+	//      the older `chaindata-<block>.tar.lz4` benchmarker snapshots,
+	//      which were tarred from inside the chaindata directory itself.
+	//      These need to land at <datadir>/geth/chaindata/.
+	//
+	// Detect by peeking the first tar header's name and pick the right dst.
+	firstName, peeked, err := peekFirstTarEntry(dec)
+	if err != nil {
+		return fmt.Errorf("peek tar: %w", err)
+	}
+	dst := gethDir
+	if !strings.HasPrefix(firstName, "chaindata/") {
+		dst = filepath.Join(gethDir, "chaindata")
+		if err := os.MkdirAll(dst, 0o755); err != nil {
+			return err
+		}
+	}
+	return snapshot.Untar(peeked, dst)
+}
+
+// peekFirstTarEntry returns the name of the first tar entry without
+// consuming it. The returned io.Reader still presents the full tar stream.
+//
+// Only the standard 100-byte name field is consulted; PAX-extended headers
+// are not unpacked. That's fine for the only two formats ferry has to
+// handle (legacy lz4 archive, ferry-produced zstd parts), neither of which
+// uses PAX.
+func peekFirstTarEntry(r io.Reader) (string, io.Reader, error) {
+	buf := bufio.NewReaderSize(r, 4096)
+	head, err := buf.Peek(512)
+	if err != nil && err != io.EOF {
+		return "", buf, err
+	}
+	if len(head) < 100 {
+		return "", buf, fmt.Errorf("tar stream truncated: %d bytes", len(head))
+	}
+	name := string(bytes.TrimRight(head[:100], "\x00"))
+	return name, buf, nil
 }
 
 func decode(r io.Reader, key string) (io.ReadCloser, error) {
