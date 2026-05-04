@@ -49,11 +49,18 @@ AWS_SECRET_ACCESS_KEY=...
 ferry upload \
   --src /datadrive/geth \
   --dst 's3://geth-s3-storage/snapshots/?endpoint=s3.de.io.cloud.ovh.net&region=de' \
-  --name geth-1-archive-23456789-1746014400 \
-  --role archive \
-  --block 23456789 \
-  --chain-id 1
+  --role archive
 ```
+
+`--name`, `--block`, and `--chain-id` are derived from the datadir
+automatically (geth must be stopped — pebble's flock is exclusive).
+You'll see a line like:
+
+```
+auto-detected: name=geth-1-archive-23456789-1746014400 chain_id=1 head=23456789 state_scheme=path
+```
+
+before the upload starts. Pass any of the three explicitly to override.
 
 Flags:
 
@@ -61,10 +68,10 @@ Flags:
 |------|---------|-------|
 | `--src` | (required) | datadir path (the dir containing `geth/`) |
 | `--dst` | (required) | destination URL (see Backends below) |
-| `--name` | (required) | `geth-<chain>-<role>-<block>-<unix-seconds>` |
-| `--role` | (required) | `archive` or `full` |
-| `--block` | (required) | head block at stop time |
-| `--chain-id` | `1` | EVM chain id |
+| `--role` | (required) | `archive` or `full` (not derivable from on-disk state alone) |
+| `--name` | auto | `geth-<chain>-<role>-<block>-<unix-seconds>` |
+| `--block` | auto | head block; read from rawdb if unset |
+| `--chain-id` | auto | EVM chain id; read from rawdb chain config if unset |
 | `--level` | `5` | zstd level (1-22; ≥ 10 forces single-threaded streaming in klauspost/compress) |
 | `--threads` | GOMAXPROCS | zstd encoder threads |
 | `--force` | `false` | ignore preflight LOCK / .ipc check |

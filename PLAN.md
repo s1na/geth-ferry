@@ -30,8 +30,10 @@ verification, and a sane CLI.
   sub-structure; we don't mirror it. Two tarballs total.
 - HBSS write support. PBSS only for new uploads. (Legacy HBSS-era snapshots
   still read fine through the legacy single-file path.)
-- Auto-detecting block / role from rawdb. Operator passes `--block` and
-  `--role` as flags.
+- Auto-detecting role (archive vs full) from rawdb. The discriminator is
+  the state-history retention window, which can be inferred from the
+  ancient/state freezer's range, but operators know their config so we
+  let them pass `--role` explicitly.
 
 ## Snapshot layout
 
@@ -253,6 +255,8 @@ github.com/s1na/geth-ferry
   pkg/upload/               # tar → zstd → backend.Put, sha256 alongside
   pkg/download/             # manifest fetch, part download, verify, extract
   pkg/legacy/               # single-file .tar.lz4 / .tar.zst path
+  pkg/progress/             # throttled stderr byte/rate reporter
+  internal/datadir/         # read-only rawdb peek for head/chain-id/scheme
 ```
 
 ## Dependencies
@@ -260,8 +264,9 @@ github.com/s1na/geth-ferry
 - `github.com/aws/aws-sdk-go-v2` (S3 + endpoint override + multipart)
 - `github.com/klauspost/compress/zstd` (pure-Go, multithreaded)
 - `github.com/pierrec/lz4/v4` (pure-Go, decode only)
+- `github.com/cockroachdb/pebble` (read-only datadir inspection)
 - `github.com/spf13/cobra` (CLI)
-- stdlib `archive/tar`, `crypto/sha256`
+- stdlib `archive/tar`, `crypto/sha256`, `encoding/json`
 
 No CGO.
 
