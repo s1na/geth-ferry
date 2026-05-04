@@ -2,3 +2,4 @@
 *.test
 *.out
 .env
+archive_snapshot_upload.md

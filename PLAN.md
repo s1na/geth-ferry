@@ -1,9 +1,9 @@
 # geth-ferry — design plan
 
 A small Go tool that uploads and downloads geth datadir snapshots between a
-node host and an S3-compatible object store. Replaces the manual
-`tar | zstd | s3cmd` runbook in `archive_snapshot_upload.md` with something
-that has a manifest, sha256 verification, and a sane CLI.
+node host and an S3-compatible object store. Replaces a manual
+`tar | zstd | s3cmd` runbook with something that has a manifest, sha256
+verification, and a sane CLI.
 
 - **Repo:** `geth-ferry`
 - **Binary / CLI:** `ferry`
