@@ -21,7 +21,7 @@ func main() {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-	root.AddCommand(uploadCmd(), downloadCmd(), inspectCmd(), listCmd(), verifyCmd())
+	root.AddCommand(uploadCmd(), downloadCmd(), inspectCmd(), listCmd(), verifyCmd(), contentsCmd())
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "ferry:", err)

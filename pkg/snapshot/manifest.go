@@ -69,6 +69,21 @@ type Part struct {
 	UncompressedSize int64    `json:"uncompressed_size"`
 	CompressedSize   int64    `json:"compressed_size"`
 	SHA256           string   `json:"sha256"`
+
+	// TOC, when non-nil, points to a zstd-compressed sidecar that lists
+	// every regular file inside this part. Lets `ferry contents` answer
+	// "what's in this snapshot" without downloading the part itself.
+	TOC *TOCRef `json:"toc,omitempty"`
+}
+
+// TOCRef describes a per-part table-of-contents sidecar. The referenced
+// object is a zstd-compressed text stream of "<size> <name>\n" lines, one
+// per regular tar entry inside the corresponding part.
+type TOCRef struct {
+	Name    string `json:"name"`    // e.g. "parts/chaindata-live.toc.zst"
+	Size    int64  `json:"size"`    // compressed sidecar size in bytes
+	SHA256  string `json:"sha256"`  // sha256 of the compressed bytes
+	Entries int    `json:"entries"` // number of files described
 }
 
 func (m *Manifest) Validate() error {

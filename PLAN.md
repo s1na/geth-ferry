@@ -43,10 +43,19 @@ A snapshot is a directory at a known prefix on the remote:
 s3://bucket/snapshots/<name>/
   manifest.json
   parts/chaindata-live.tar.zst    # always
+  parts/chaindata-live.toc.zst    # ← per-part TOC sidecar
   parts/ancient-chain.tar.zst     # always
+  parts/ancient-chain.toc.zst
   parts/ancient-state.tar.zst     # PBSS only (full or archive)
+  parts/ancient-state.toc.zst
   parts/triedb.tar.zst            # PBSS only
+  parts/triedb.toc.zst
 ```
+
+Each `*.toc.zst` is a zstd-compressed text file: one `<size> <name>\n` line
+per regular tar entry inside the corresponding part. Lets `ferry contents`
+list the snapshot's files without touching the parts themselves (typically
+KB-to-MB total instead of GB).
 
 Up to four parts. `manifest.json` is written **last**, after every part
 has uploaded and its sha256 is known. No manifest → upload was interrupted;

@@ -114,10 +114,17 @@ Flags:
 ## Other commands
 
 ```
-ferry inspect <local-or-remote>     # print manifest.json
-ferry list    --src <prefix-url>    # tabular list of snapshots under a prefix
-ferry verify  --src <snapshot-url>  # re-fetch each part and check sha256
+ferry inspect  <local-or-remote>     # print manifest.json
+ferry list     --src <prefix-url>    # tabular list of snapshots under a prefix
+ferry verify   --src <snapshot-url>  # re-fetch each part and check sha256
+ferry contents --src <snapshot-url>  # list files inside the snapshot's parts (cheap)
 ```
+
+`ferry contents` reads the manifest plus a small sidecar (`parts/<n>.toc.zst`)
+written alongside each part at upload time — typically a few KB to a couple
+of MB total. It does **not** read the parts themselves, so listing a 350 GB
+snapshot answers in seconds. Snapshots produced by older ferry versions
+that don't have TOCs are flagged in the output.
 
 ## Backends
 
