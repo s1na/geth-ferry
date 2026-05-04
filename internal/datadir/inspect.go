@@ -17,7 +17,6 @@
 package datadir
 
 import (
-	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -104,32 +103,37 @@ func readHash(db *pebble.DB, key []byte) ([32]byte, error) {
 
 func readChainConfig(db *pebble.DB) ([32]byte, uint64, error) {
 	var genesis [32]byte
-	prefix := []byte("ethereum-config-")
 
-	iter, err := db.NewIter(&pebble.IterOptions{
-		LowerBound: prefix,
-		UpperBound: keyUpperBound(prefix),
-	})
+	// Genesis hash = canonical hash of block 0. Read it directly via the
+	// canonical-chain key rather than iterating the chain-config namespace —
+	// this asserts we pick up the chain we've actually been syncing rather
+	// than whichever ethereum-config-* key happens to sort first.
+	//
+	// Key shape: "h" + uint64-be(number) + "n"  →  32-byte canonical hash.
+	canonicalKey := append(
+		append([]byte{'h'}, make([]byte, 8)...), // 8 zero bytes encode block 0
+		'n',
+	)
+	gh, err := readHash(db, canonicalKey)
 	if err != nil {
-		return genesis, 0, err
+		return genesis, 0, fmt.Errorf("read canonical hash of block 0: %w", err)
 	}
-	defer iter.Close()
+	genesis = gh
 
-	if !iter.First() {
-		return genesis, 0, fmt.Errorf("no chain config found (no %q keys)", prefix)
+	// Now look up the chain config keyed by that exact genesis hash.
+	cfgKey := append([]byte("ethereum-config-"), genesis[:]...)
+	cfgBytes, closer, err := db.Get(cfgKey)
+	if err != nil {
+		return genesis, 0, fmt.Errorf("read chain config for genesis 0x%x: %w", genesis, err)
 	}
-	key := iter.Key()
-	if !bytes.HasPrefix(key, prefix) || len(key) != len(prefix)+32 {
-		return genesis, 0, fmt.Errorf("malformed chain config key %q", key)
-	}
-	copy(genesis[:], key[len(prefix):])
+	defer closer.Close()
 
 	// We only need chainId. Geth's ChainConfig has many fields and they
 	// shift across releases — decoding into a tiny shim avoids brittleness.
 	var cfg struct {
 		ChainID *uint64 `json:"chainId"`
 	}
-	if err := json.Unmarshal(iter.Value(), &cfg); err != nil {
+	if err := json.Unmarshal(cfgBytes, &cfg); err != nil {
 		return genesis, 0, fmt.Errorf("decode chain config json: %w", err)
 	}
 	if cfg.ChainID == nil {
@@ -150,17 +154,3 @@ func (discardLogger) Fatalf(format string, args ...interface{}) {
 	panic(fmt.Sprintf(format, args...))
 }
 
-// keyUpperBound returns the smallest byte slice that's strictly greater
-// than every key with prefix b. Returns nil if b is all 0xff (which means
-// "no upper bound" — pebble accepts a nil UpperBound for that case).
-func keyUpperBound(b []byte) []byte {
-	end := make([]byte, len(b))
-	copy(end, b)
-	for i := len(end) - 1; i >= 0; i-- {
-		end[i]++
-		if end[i] != 0 {
-			return end[:i+1]
-		}
-	}
-	return nil
-}

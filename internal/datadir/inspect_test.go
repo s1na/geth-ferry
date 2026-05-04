@@ -35,6 +35,7 @@ func TestInspectSyntheticPebble(t *testing.T) {
 	numBytes := make([]byte, 8)
 	binary.BigEndian.PutUint64(numBytes, headNum)
 	mustSet(t, db, append([]byte{'H'}, headHash[:]...), numBytes)
+	mustSet(t, db, canonicalKey(0), genesis[:])
 	mustSet(t, db, append([]byte("ethereum-config-"), genesis[:]...),
 		[]byte(`{"chainId": 1, "homesteadBlock": 1150000}`))
 
@@ -82,11 +83,13 @@ func TestInspectHBSS(t *testing.T) {
 	}
 
 	hash := bytes32(t, "2222222222222222222222222222222222222222222222222222222222222222")
+	genesis := bytes32(t, "25a5cc106eea7138acab33231d7160d69cb777ee0c2c553fcddf5138993e6dd9") // sepolia
 	mustSet(t, db, []byte("LastBlock"), hash[:])
 	numBytes := make([]byte, 8)
 	binary.BigEndian.PutUint64(numBytes, 100)
 	mustSet(t, db, append([]byte{'H'}, hash[:]...), numBytes)
-	mustSet(t, db, append([]byte("ethereum-config-"), hash[:]...),
+	mustSet(t, db, canonicalKey(0), genesis[:])
+	mustSet(t, db, append([]byte("ethereum-config-"), genesis[:]...),
 		[]byte(`{"chainId": 11155111}`))
 
 	if err := db.Close(); err != nil {
@@ -111,24 +114,6 @@ func TestInspectMissingDatadir(t *testing.T) {
 	}
 }
 
-func TestKeyUpperBound(t *testing.T) {
-	cases := []struct {
-		in  string
-		out string
-	}{
-		{"ethereum-config-", "ethereum-config."}, // '-' (0x2d) → '.' (0x2e)
-		{"a", "b"},
-		{"foo\xfe", "foo\xff"},
-		{"foo\xff\xff", "fop"}, // overflow last two bytes
-	}
-	for _, c := range cases {
-		got := keyUpperBound([]byte(c.in))
-		if string(got) != c.out {
-			t.Errorf("keyUpperBound(%q) = %q, want %q", c.in, got, c.out)
-		}
-	}
-}
-
 func bytes32(t *testing.T, s string) [32]byte {
 	t.Helper()
 	b, err := hex.DecodeString(s)
@@ -148,4 +133,13 @@ func mustSet(t *testing.T, db *pebble.DB, k, v []byte) {
 	if err := db.Set(k, v, pebble.Sync); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// canonicalKey assembles geth's "h<num-be>n" canonical-hash key.
+func canonicalKey(number uint64) []byte {
+	out := make([]byte, 1+8+1)
+	out[0] = 'h'
+	binary.BigEndian.PutUint64(out[1:9], number)
+	out[9] = 'n'
+	return out
 }
