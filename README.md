@@ -76,9 +76,14 @@ Flags:
 | `--threads` | GOMAXPROCS | zstd encoder threads |
 | `--force` | `false` | ignore preflight LOCK / .ipc check |
 | `--quiet` | `false` | suppress periodic progress output on stderr |
+| `--dry-run` | `false` | print the planned upload (parts, source bytes, destination keys) and exit without writing anything |
 
 Resume of an interrupted upload is **not** supported in v1: rerun starts the
 failed part over. Run inside `tmux` / `screen` like the legacy runbook does.
+
+Use `--dry-run` to confirm what ferry plans to do — the auto-detected name,
+the per-part source sizes and file counts, and the destination keys —
+without committing to the multi-hour streamer.
 
 ## Download
 
@@ -136,6 +141,10 @@ Uses AWS SDK v2 with optional endpoint override (for OVH and other
 S3-compatible providers). Configurable via URL query string; credentials
 come from the standard AWS chain (env vars, `~/.aws/credentials`, instance
 profile).
+
+Set `FERRY_S3_DEBUG=1` to enable verbose AWS SDK logging (request bodies,
+response headers, retries) on stderr — useful when diagnosing endpoint
+compatibility issues.
 
 | Query param | Default | Notes |
 |-------------|---------|-------|
