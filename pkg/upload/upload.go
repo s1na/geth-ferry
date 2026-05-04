@@ -30,7 +30,7 @@ type Options struct {
 	// DataDir is the path to the geth datadir (the dir containing geth/, keystore/, …).
 	DataDir string
 
-	// Name is the snapshot identifier (e.g. geth-1-archive-23456789-20260430).
+	// Name is the snapshot identifier (e.g. geth-1-archive-23456789-1746014400).
 	Name string
 
 	// Role and Block are recorded in the manifest.

@@ -34,8 +34,9 @@ not-a-snapshot. Ferry refuses to upload if `chaindata/ancient/` contains
 anything other than `chain/` and `state/` — fail-fast on geth versions we
 don't understand.
 
-The snapshot name is `geth-<chainid>-<role>-<block>-<YYYYMMDD>` where
-`role` ∈ `archive`, `full`. Example: `geth-1-archive-23456789-20260430`.
+The snapshot name is `geth-<chainid>-<role>-<block>-<unix-seconds>` where
+`role` ∈ `archive`, `full`. The trailing component is a Unix timestamp,
+matching `manifest.created_at`. Example: `geth-1-archive-23456789-1746014400`.
 
 ## Upload
 
@@ -48,7 +49,7 @@ AWS_SECRET_ACCESS_KEY=...
 ferry upload \
   --src /datadrive/geth \
   --dst 's3://geth-s3-storage/snapshots/?endpoint=s3.de.io.cloud.ovh.net&region=de' \
-  --name geth-1-archive-23456789-20260430 \
+  --name geth-1-archive-23456789-1746014400 \
   --role archive \
   --block 23456789 \
   --chain-id 1
@@ -60,7 +61,7 @@ Flags:
 |------|---------|-------|
 | `--src` | (required) | datadir path (the dir containing `geth/`) |
 | `--dst` | (required) | destination URL (see Backends below) |
-| `--name` | (required) | `geth-<chain>-<role>-<block>-<YYYYMMDD>` |
+| `--name` | (required) | `geth-<chain>-<role>-<block>-<unix-seconds>` |
 | `--role` | (required) | `archive` or `full` |
 | `--block` | (required) | head block at stop time |
 | `--chain-id` | `1` | EVM chain id |
@@ -76,7 +77,7 @@ failed part over. Run inside `tmux` / `screen` like the legacy runbook does.
 
 ```
 ferry download \
-  --src 's3://geth-s3-storage/snapshots/geth-1-archive-23456789-20260430?endpoint=s3.de.io.cloud.ovh.net&region=de' \
+  --src 's3://geth-s3-storage/snapshots/geth-1-archive-23456789-1746014400?endpoint=s3.de.io.cloud.ovh.net&region=de' \
   --dst /datadrive/geth
 ```
 

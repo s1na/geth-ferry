@@ -82,16 +82,17 @@ secrets that should never land in a public bucket.
 ### Naming convention
 
 ```
-geth-<chainid>-<role>-<block>-<YYYYMMDD>
+geth-<chainid>-<role>-<block>-<unix-seconds>
 ```
 
 - `geth` is a fixed prefix marking the producing client.
 - `chainid` is the EVM chain ID (`1` mainnet, `11155111` sepolia).
 - `role` ∈ `archive`, `full`. That's the whole taxonomy.
 - `block` is the head block number at the moment geth was stopped.
-- `YYYYMMDD` is UTC.
+- `unix-seconds` is the snapshot creation time, matching `manifest.created_at`.
+  Locale-free, unambiguously orderable.
 
-Example: `geth-1-archive-23456789-20260430`.
+Example: `geth-1-archive-23456789-1746014400`.
 
 The same string is the directory name on the remote and the prefix used in
 any `latest.txt` pointer.
@@ -118,7 +119,7 @@ above 5 is rarely worth it.
 ```json
 {
   "version": 1,
-  "name": "geth-1-archive-23456789-20260430",
+  "name": "geth-1-archive-23456789-1746014400",
   "chain_id": 1,
   "role": "archive",
   "state_scheme": "path",
@@ -209,7 +210,7 @@ ferry inspect  <local-or-remote>     # print manifest, no I/O on parts
 ```
 --src <datadir>            # required, e.g. /datadrive/geth
 --dst <remote>             # required
---name <name>              # required: geth-1-archive-23456789-20260430
+--name <name>              # required: geth-1-archive-23456789-1746014400
 --role archive|full        # required
 --block <n>                # required (head block at stop time)
 --level 5                  # zstd level, default 5

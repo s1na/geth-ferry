@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -85,7 +86,7 @@ func listCmd() *cobra.Command {
 				}
 				fmt.Fprintf(tw, "%s\t%d\t%s\t%d\t%s\t%s\n",
 					n, meta.ChainID, meta.Role, meta.Block,
-					meta.Date.Format("2006-01-02"), humanBytes(e.totalSize))
+					time.Unix(meta.Timestamp, 0).UTC().Format("2006-01-02"), humanBytes(e.totalSize))
 			}
 			return nil
 		},

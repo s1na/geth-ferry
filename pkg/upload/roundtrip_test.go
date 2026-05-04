@@ -31,7 +31,7 @@ func TestRoundTrip(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	name := "geth-1-archive-100-20260430"
+	name := "geth-1-archive-100-1746014400"
 	m, err := upload.Run(ctx, be, "", upload.Options{
 		DataDir: srcDataDir,
 		Name:    name,
@@ -109,7 +109,7 @@ func TestRoundTripHBSS(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	name := "geth-1-full-50-20260430"
+	name := "geth-1-full-50-1746014400"
 	m, err := upload.Run(ctx, be, "", upload.Options{
 		DataDir: srcDataDir,
 		Name:    name,
@@ -157,7 +157,7 @@ func TestUploadRefusesUnexpectedAncientEntry(t *testing.T) {
 	}
 	_, err = upload.Run(context.Background(), be, "", upload.Options{
 		DataDir: srcDataDir,
-		Name:    "geth-1-archive-100-20260430",
+		Name:    "geth-1-archive-100-1746014400",
 		Role:    snapshot.RoleArchive,
 		Block:   100,
 		ChainID: 1,
@@ -185,7 +185,7 @@ func TestUploadRefusesLockedDatadir(t *testing.T) {
 	ctx := context.Background()
 	opts := upload.Options{
 		DataDir: srcDataDir,
-		Name:    "geth-1-archive-100-20260430",
+		Name:    "geth-1-archive-100-1746014400",
 		Role:    snapshot.RoleArchive,
 		Block:   100,
 		ChainID: 1,

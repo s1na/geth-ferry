@@ -7,7 +7,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 )
 
 const (
@@ -31,20 +30,28 @@ const (
 	TriedbPart = "parts/triedb.tar.zst"
 )
 
-// Name describes a snapshot's identifier: geth-<chainid>-<role>-<block>-<YYYYMMDD>.
+// Name describes a snapshot's identifier:
+// geth-<chainid>-<role>-<block>-<unix-seconds>.
+//
+// The trailing component is a Unix timestamp (seconds since epoch, UTC) —
+// matches `manifest.created_at`'s format and is unambiguously orderable
+// without locale/timezone games.
 type Name struct {
-	ChainID uint64
-	Role    Role
-	Block   uint64
-	Date    time.Time // UTC, day precision
+	ChainID   uint64
+	Role      Role
+	Block     uint64
+	Timestamp int64 // Unix seconds (UTC)
 }
 
 func (n Name) String() string {
-	return fmt.Sprintf("geth-%d-%s-%d-%s",
-		n.ChainID, n.Role, n.Block, n.Date.UTC().Format("20060102"))
+	return fmt.Sprintf("geth-%d-%s-%d-%d",
+		n.ChainID, n.Role, n.Block, n.Timestamp)
 }
 
-var nameRegexp = regexp.MustCompile(`^geth-(\d+)-(archive|full)-(\d+)-(\d{8})$`)
+// nameRegexp accepts a 9- to 12-digit timestamp tail. 9 digits covers
+// dates up to 2001; 12 covers through ~5138. Plenty of room without
+// matching arbitrary integers.
+var nameRegexp = regexp.MustCompile(`^geth-(\d+)-(archive|full)-(\d+)-(\d{9,12})$`)
 
 // ParseName parses a snapshot name into its components. Returns an error if
 // the input doesn't match the expected shape.
@@ -61,15 +68,15 @@ func ParseName(s string) (Name, error) {
 	if err != nil {
 		return Name{}, fmt.Errorf("block in %q: %w", s, err)
 	}
-	date, err := time.Parse("20060102", m[4])
+	ts, err := strconv.ParseInt(m[4], 10, 64)
 	if err != nil {
-		return Name{}, fmt.Errorf("date in %q: %w", s, err)
+		return Name{}, fmt.Errorf("timestamp in %q: %w", s, err)
 	}
 	return Name{
-		ChainID: chainID,
-		Role:    Role(m[2]),
-		Block:   block,
-		Date:    date,
+		ChainID:   chainID,
+		Role:      Role(m[2]),
+		Block:     block,
+		Timestamp: ts,
 	}, nil
 }
 
