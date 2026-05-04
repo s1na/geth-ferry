@@ -11,17 +11,23 @@
 package s3
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"net/url"
+	"os"
 	"path"
+	"sort"
 	"strings"
+	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
@@ -69,6 +75,9 @@ func (o ClientOptions) configOptions() []func(*config.LoadOptions) error {
 	if o.Region != "" {
 		out = append(out, config.WithRegion(o.Region))
 	}
+	if os.Getenv("FERRY_S3_DEBUG") != "" {
+		out = append(out, config.WithClientLogMode(aws.LogRequestWithBody|aws.LogResponse|aws.LogRetries))
+	}
 	return out
 }
 
@@ -81,6 +90,14 @@ func (o ClientOptions) serviceOptions() []func(*s3.Options) {
 			if o.PathStyle {
 				s.UsePathStyle = true
 			}
+			// We don't use aws-sdk-go-v2's manager.Uploader (its v1.30+
+			// integrity protections wrap UploadPart bodies in aws-chunked
+			// encoding with a CRC32 trailer, which OVH rejects with
+			// "IncompleteBody"). Our manual Put writes plain bodies with
+			// an explicit CRC32 *header* — but ResponseChecksumValidation
+			// would still try to validate response trailers we don't set.
+			s.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
+			s.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
 		},
 	}
 }
@@ -215,29 +232,35 @@ func (b *Backend) Get(ctx context.Context, key string) (io.ReadCloser, error) {
 	return out.Body, nil
 }
 
-// Put returns a streaming writer that uploads via S3 multipart upload.
-// The upload is run in a background goroutine reading from a pipe; Close
-// finalizes the upload and returns its outcome. If a write fails (because
-// the goroutine errored), the upload error surfaces from Close.
+// MultipartConcurrency is the number of UploadPart requests in flight
+// at once during a single Put.
+const MultipartConcurrency = 5
+
+// Put returns a streaming writer backed by an S3 multipart upload that we
+// drive ourselves (no manager.Uploader). Each part is sent as a fixed-size
+// byte buffer with an explicit ContentLength and an inline Crc32 header;
+// no aws-chunked encoding, no trailers — keeps OVH and other strict S3
+// implementations happy.
 func (b *Backend) Put(ctx context.Context, key string) (io.WriteCloser, error) {
 	full := b.fullKey(key)
-	pr, pw := io.Pipe()
-	uploader := manager.NewUploader(b.client, func(u *manager.Uploader) {
-		u.PartSize = MultipartPartSize
+	out, err := b.client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
+		Bucket: &b.bucket,
+		Key:    &full,
 	})
-	w := &s3Writer{pw: pw, done: make(chan error, 1)}
-	go func() {
-		_, err := uploader.Upload(ctx, &s3.PutObjectInput{
-			Bucket: &b.bucket,
-			Key:    &full,
-			Body:   pr,
-		})
-		// Closing the pipe reader unblocks any pending Write with an error
-		// (matches uploader.Upload's behavior when it returns).
-		_ = pr.CloseWithError(err)
-		w.done <- err
-	}()
-	return w, nil
+	if err != nil {
+		return nil, fmt.Errorf("create multipart upload %s: %w", full, err)
+	}
+	return &multipartWriter{
+		ctx:      ctx,
+		client:   b.client,
+		bucket:   b.bucket,
+		key:      full,
+		uploadID: aws.ToString(out.UploadId),
+		partSize: MultipartPartSize,
+		buf:      make([]byte, 0, MultipartPartSize),
+		partNum:  1,
+		sem:      make(chan struct{}, MultipartConcurrency),
+	}, nil
 }
 
 func (b *Backend) Delete(ctx context.Context, key string) error {
@@ -267,40 +290,165 @@ func isNotFound(err error) bool {
 	return false
 }
 
-type s3Writer struct {
-	pw     *io.PipeWriter
-	done   chan error
+// multipartWriter implements io.WriteCloser by buffering up to partSize
+// bytes and dispatching each filled buffer as an UploadPart in a worker
+// goroutine. Up to MultipartConcurrency parts are in flight at once.
+type multipartWriter struct {
+	ctx      context.Context
+	client   *s3.Client
+	bucket   string
+	key      string
+	uploadID string
+	partSize int
+
+	buf     []byte
+	partNum int32
+
+	sem chan struct{}
+	wg  sync.WaitGroup
+
+	mu     sync.Mutex
+	parts  []s3types.CompletedPart
+	failed error // first part-upload error wins
+
 	closed bool
 }
 
-func (w *s3Writer) Write(p []byte) (int, error) {
-	return w.pw.Write(p)
+func (w *multipartWriter) Write(p []byte) (int, error) {
+	if err := w.peekErr(); err != nil {
+		return 0, err
+	}
+	written := len(p)
+	for len(p) > 0 {
+		room := w.partSize - len(w.buf)
+		if room == 0 {
+			if err := w.dispatchBuffered(); err != nil {
+				return 0, err
+			}
+			continue
+		}
+		n := len(p)
+		if n > room {
+			n = room
+		}
+		w.buf = append(w.buf, p[:n]...)
+		p = p[n:]
+	}
+	return written, nil
 }
 
-func (w *s3Writer) Close() error {
-	if w.closed {
+func (w *multipartWriter) peekErr() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.failed
+}
+
+func (w *multipartWriter) recordErr(err error) {
+	w.mu.Lock()
+	if w.failed == nil {
+		w.failed = err
+	}
+	w.mu.Unlock()
+}
+
+// dispatchBuffered starts an UploadPart for the current buffer and rotates
+// in a fresh one. Bounded by sem.
+func (w *multipartWriter) dispatchBuffered() error {
+	if len(w.buf) == 0 {
 		return nil
 	}
-	w.closed = true
-	// Closing the pipe writer signals EOF to the uploader; it then completes
-	// the multipart upload and reports back via w.done.
-	if err := w.pw.Close(); err != nil {
-		<-w.done
+	if err := w.peekErr(); err != nil {
 		return err
 	}
-	return <-w.done
+
+	body := w.buf
+	w.buf = make([]byte, 0, w.partSize)
+	pn := w.partNum
+	w.partNum++
+
+	w.sem <- struct{}{}
+	w.wg.Add(1)
+	go func() {
+		defer w.wg.Done()
+		defer func() { <-w.sem }()
+		w.uploadOnePart(pn, body)
+	}()
+	return nil
 }
 
-// CloseWithError aborts the upload by sending err down the pipe to the
-// uploader goroutine. The eventual upload error is returned. Used by
-// callers that need to abort mid-stream.
-func (w *s3Writer) CloseWithError(err error) error {
+func (w *multipartWriter) uploadOnePart(pn int32, body []byte) {
+	crcSum := crc32.ChecksumIEEE(body)
+	var crcBytes [4]byte
+	binary.BigEndian.PutUint32(crcBytes[:], crcSum)
+	crcB64 := base64.StdEncoding.EncodeToString(crcBytes[:])
+
+	out, err := w.client.UploadPart(w.ctx, &s3.UploadPartInput{
+		Bucket:        &w.bucket,
+		Key:           &w.key,
+		UploadId:      &w.uploadID,
+		PartNumber:    aws.Int32(pn),
+		Body:          bytes.NewReader(body),
+		ContentLength: aws.Int64(int64(len(body))),
+		ChecksumCRC32: aws.String(crcB64),
+	})
+	if err != nil {
+		w.recordErr(fmt.Errorf("upload part %d: %w", pn, err))
+		return
+	}
+	w.mu.Lock()
+	w.parts = append(w.parts, s3types.CompletedPart{
+		PartNumber:    aws.Int32(pn),
+		ETag:          out.ETag,
+		ChecksumCRC32: aws.String(crcB64),
+	})
+	w.mu.Unlock()
+}
+
+func (w *multipartWriter) Close() error {
 	if w.closed {
 		return nil
 	}
 	w.closed = true
-	_ = w.pw.CloseWithError(err)
-	return <-w.done
+
+	// Flush whatever's still buffered as the final (potentially small) part.
+	flushErr := w.dispatchBuffered()
+	w.wg.Wait()
+
+	if err := w.peekErr(); err != nil {
+		w.abort()
+		return err
+	}
+	if flushErr != nil {
+		w.abort()
+		return flushErr
+	}
+
+	// CompleteMultipartUpload requires parts in ascending PartNumber order.
+	sort.Slice(w.parts, func(i, j int) bool {
+		return aws.ToInt32(w.parts[i].PartNumber) < aws.ToInt32(w.parts[j].PartNumber)
+	})
+
+	if _, err := w.client.CompleteMultipartUpload(w.ctx, &s3.CompleteMultipartUploadInput{
+		Bucket:          &w.bucket,
+		Key:             &w.key,
+		UploadId:        &w.uploadID,
+		MultipartUpload: &s3types.CompletedMultipartUpload{Parts: w.parts},
+	}); err != nil {
+		w.abort()
+		return fmt.Errorf("complete multipart %s: %w", w.key, err)
+	}
+	return nil
+}
+
+// abort tries to clean up an in-progress multipart upload after a failure.
+// Best-effort: we already have an error to return; abort failures are
+// silent because there's nothing useful to do with them here.
+func (w *multipartWriter) abort() {
+	_, _ = w.client.AbortMultipartUpload(w.ctx, &s3.AbortMultipartUploadInput{
+		Bucket:   &w.bucket,
+		Key:      &w.key,
+		UploadId: &w.uploadID,
+	})
 }
 
 // SnapshotPath joins a snapshot name and child path under the backend's
