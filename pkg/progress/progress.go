@@ -14,10 +14,16 @@ import (
 // Tracker counts bytes added via Writer and periodically reports progress
 // on Out. Use Start to launch the ticker, Stop to halt it and emit a final
 // summary line.
+//
+// When Total is non-zero, the periodic line additionally renders a
+// percentage and an ETA based on the running average rate. Total should
+// be the expected end value of bytes that will pass through this
+// Tracker — for ferry that's the uncompressed source size of the part.
 type Tracker struct {
 	Label    string
 	Out      io.Writer     // defaults to os.Stderr
 	Interval time.Duration // defaults to 2s
+	Total    int64         // optional — expected end value; enables % + ETA
 
 	started time.Time
 	n       atomic.Int64
@@ -85,8 +91,25 @@ func (t *Tracker) report(suffix string) {
 	if suffix != "" {
 		tag = " — " + suffix
 	}
-	fmt.Fprintf(t.Out, "[%s] %s in %s (%s/s)%s\n",
-		t.Label, HumanBytes(n), elapsed.Round(time.Second), HumanBytes(int64(rate)), tag)
+	// Optional progress-towards-total block: "/ 2.18 TiB (5.7%) ETA 3h41m".
+	var progressTag string
+	if t.Total > 0 {
+		pct := 100 * float64(n) / float64(t.Total)
+		if pct > 100 {
+			pct = 100
+		}
+		eta := "—"
+		if rate > 0 && n < t.Total {
+			// Compute as float seconds, then to Duration in one cast so the
+			// nanosecond-scale conversion uses the full float magnitude
+			// instead of overflowing through int64(seconds) × time.Second.
+			remaining := time.Duration(float64(t.Total-n) / rate * float64(time.Second))
+			eta = remaining.Round(time.Second).String()
+		}
+		progressTag = fmt.Sprintf(" / %s (%.1f%%) ETA %s", HumanBytes(t.Total), pct, eta)
+	}
+	fmt.Fprintf(t.Out, "[%s] %s%s in %s (%s/s)%s\n",
+		t.Label, HumanBytes(n), progressTag, elapsed.Round(time.Second), HumanBytes(int64(rate)), tag)
 }
 
 type writerFunc func(p []byte) (int, error)

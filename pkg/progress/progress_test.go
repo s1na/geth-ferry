@@ -32,6 +32,37 @@ func TestTrackerEmitsLines(t *testing.T) {
 	}
 }
 
+// TestTrackerWithTotalEmitsETA covers the rendering of the percentage
+// and ETA suffix when Total is set. We don't pin the ETA value
+// (depends on wall-clock timing), just its presence.
+func TestTrackerWithTotalEmitsETA(t *testing.T) {
+	var buf safeBuf
+	tr := (&Tracker{
+		Label:    "test",
+		Out:      &buf,
+		Interval: 25 * time.Millisecond,
+		Total:    4096,
+	}).Start()
+
+	w := tr.Writer()
+	for i := 0; i < 4; i++ {
+		w.Write(make([]byte, 1024))
+		time.Sleep(40 * time.Millisecond)
+	}
+	tr.Stop()
+
+	got := buf.String()
+	if !strings.Contains(got, "/ 4.00 KiB") {
+		t.Errorf("missing total in output: %q", got)
+	}
+	if !strings.Contains(got, "%") {
+		t.Errorf("missing percentage in output: %q", got)
+	}
+	if !strings.Contains(got, "ETA") {
+		t.Errorf("missing ETA in output: %q", got)
+	}
+}
+
 func TestHumanBytes(t *testing.T) {
 	cases := map[int64]string{
 		0:                "0 B",
