@@ -9,7 +9,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"os"
 	"path"
 	"path/filepath"
 
@@ -37,6 +36,13 @@ type Options struct {
 }
 
 // Run downloads and extracts the snapshot at prefix/name from src.
+//
+// Extraction is atomic: parts are written into a scratch directory next to
+// <DataDir>/geth/, then renamed into place only after every part has been
+// downloaded and sha256-verified. A failed download leaves no partial
+// state behind. When opts.Force is set and <DataDir>/geth/ already
+// exists, the original is removed only at promote time — a failure
+// midway through doesn't damage the existing tree.
 func Run(ctx context.Context, src backend.Backend, prefix string, opts Options) (*snapshot.Manifest, error) {
 	if opts.DataDir == "" {
 		return nil, fmt.Errorf("DataDir is required")
@@ -46,12 +52,16 @@ func Run(ctx context.Context, src backend.Backend, prefix string, opts Options) 
 	}
 
 	gethDir := filepath.Join(opts.DataDir, "geth")
-	if err := snapshot.EnsureEmpty(gethDir, opts.Force); err != nil {
+	target, err := snapshot.PrepareAtomic(gethDir, opts.Force)
+	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(gethDir, 0o755); err != nil {
-		return nil, err
-	}
+	committed := false
+	defer func() {
+		if !committed {
+			target.Abort()
+		}
+	}()
 
 	manifest, err := fetchManifest(ctx, src, prefix, opts.Name)
 	if err != nil {
@@ -59,10 +69,14 @@ func Run(ctx context.Context, src backend.Backend, prefix string, opts Options) 
 	}
 
 	for _, p := range manifest.Parts {
-		if err := downloadPart(ctx, src, prefix, opts.Name, p, gethDir, opts.Progress); err != nil {
+		if err := downloadPart(ctx, src, prefix, opts.Name, p, target.Path, opts.Progress); err != nil {
 			return nil, fmt.Errorf("part %s: %w", p.Name, err)
 		}
 	}
+	if err := target.Commit(); err != nil {
+		return nil, err
+	}
+	committed = true
 	return manifest, nil
 }
 

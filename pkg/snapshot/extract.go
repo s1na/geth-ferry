@@ -51,6 +51,70 @@ func EnsureEmpty(dir string, force bool) error {
 	return nil
 }
 
+// AtomicTarget is a scratch directory that callers extract into and then
+// either Commit (rename into the final destination) or Abort (remove).
+// Used to keep failed downloads from leaving a half-populated datadir.
+type AtomicTarget struct {
+	// Path is the scratch directory. Callers write to this.
+	Path string
+
+	dst  string
+	done bool
+}
+
+// PrepareAtomic creates a scratch directory as a sibling of dst (so that
+// the eventual rename stays on the same filesystem). The caller writes
+// to t.Path, then calls either t.Commit (success) or t.Abort (failure).
+//
+// If dst already exists and force is false, returns an error before
+// creating any scratch state. If force is true and dst exists, Commit
+// removes the original after the new tree is fully populated.
+func PrepareAtomic(dst string, force bool) (*AtomicTarget, error) {
+	if err := EnsureEmpty(dst, force); err != nil {
+		return nil, err
+	}
+	parent := filepath.Dir(dst)
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return nil, err
+	}
+	// Use a hidden prefix so a partial directory is obviously not the
+	// real target, in case Abort fails to remove it (out of disk, etc.).
+	tmp, err := os.MkdirTemp(parent, ".ferry-partial-")
+	if err != nil {
+		return nil, err
+	}
+	return &AtomicTarget{Path: tmp, dst: dst}, nil
+}
+
+// Commit atomically promotes the scratch directory to dst. If dst already
+// exists (force-overwrite case), the original is removed first.
+func (a *AtomicTarget) Commit() error {
+	if a.done {
+		return nil
+	}
+	a.done = true
+	if _, err := os.Stat(a.dst); err == nil {
+		if err := os.RemoveAll(a.dst); err != nil {
+			_ = os.RemoveAll(a.Path)
+			return fmt.Errorf("clear existing %s: %w", a.dst, err)
+		}
+	}
+	if err := os.Rename(a.Path, a.dst); err != nil {
+		_ = os.RemoveAll(a.Path)
+		return fmt.Errorf("promote %s to %s: %w", a.Path, a.dst, err)
+	}
+	return nil
+}
+
+// Abort removes the scratch directory. Safe to call after Commit (no-op).
+func (a *AtomicTarget) Abort() {
+	if a.done {
+		return
+	}
+	a.done = true
+	_ = os.RemoveAll(a.Path)
+}
+
 func safeExtract(tr *tar.Reader, hdr *tar.Header, dst string) error {
 	clean := filepath.Clean(filepath.FromSlash(hdr.Name))
 	if strings.HasPrefix(clean, ".."+string(filepath.Separator)) || clean == ".." {

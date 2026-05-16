@@ -43,18 +43,26 @@ type Options struct {
 
 // Download fetches the legacy single-file snapshot at key from src and
 // extracts it into <DataDir>/geth/. The codec is detected by suffix.
+//
+// Extraction is atomic: bytes go into a scratch directory next to the
+// destination and are renamed into place only after the full tar stream
+// has been consumed. A failed download leaves no partial state behind.
 func Download(ctx context.Context, src backend.Backend, key string, opts Options) error {
 	if opts.DataDir == "" {
 		return fmt.Errorf("DataDir is required")
 	}
 
 	gethDir := filepath.Join(opts.DataDir, "geth")
-	if err := snapshot.EnsureEmpty(gethDir, opts.Force); err != nil {
+	target, err := snapshot.PrepareAtomic(gethDir, opts.Force)
+	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(gethDir, 0o755); err != nil {
-		return err
-	}
+	committed := false
+	defer func() {
+		if !committed {
+			target.Abort()
+		}
+	}()
 
 	r, err := src.Get(ctx, key)
 	if err != nil {
@@ -89,14 +97,21 @@ func Download(ctx context.Context, src backend.Backend, key string, opts Options
 	if err != nil {
 		return fmt.Errorf("peek tar: %w", err)
 	}
-	dst := gethDir
+	dst := target.Path
 	if !strings.HasPrefix(firstName, "chaindata/") {
-		dst = filepath.Join(gethDir, "chaindata")
+		dst = filepath.Join(target.Path, "chaindata")
 		if err := os.MkdirAll(dst, 0o755); err != nil {
 			return err
 		}
 	}
-	return snapshot.Untar(peeked, dst)
+	if err := snapshot.Untar(peeked, dst); err != nil {
+		return err
+	}
+	if err := target.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	return nil
 }
 
 // peekFirstTarEntry returns the name of the first tar entry without
