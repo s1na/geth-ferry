@@ -1,11 +1,13 @@
 package upload_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/s1na/geth-ferry/pkg/backend/file"
@@ -196,6 +198,130 @@ func TestUploadRefusesLockedDatadir(t *testing.T) {
 	opts.Force = true
 	if _, err := upload.Run(ctx, be, "", opts); err != nil {
 		t.Fatalf("upload with --force: %v", err)
+	}
+}
+
+// TestDownloadAtomicOnFailure proves that a download failure (here:
+// tampered manifest sha256) leaves the destination datadir untouched
+// rather than half-populated. Pre-atomic ferry would have extracted
+// parts directly into <dst>/geth/ and bailed mid-stream.
+func TestDownloadAtomicOnFailure(t *testing.T) {
+	tmp := t.TempDir()
+	srcDataDir := filepath.Join(tmp, "src")
+	bucket := filepath.Join(tmp, "bucket")
+	dstDataDir := filepath.Join(tmp, "dst")
+
+	makeFakeDatadir(t, srcDataDir)
+
+	be, err := file.New(bucket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	name := "geth-1-archive-100-1746014400"
+	if _, err := upload.Run(ctx, be, "", upload.Options{
+		DataDir: srcDataDir,
+		Name:    name,
+		Role:    snapshot.RoleArchive,
+		Block:   100,
+		ChainID: 1,
+	}); err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+
+	// Corrupt the manifest's first part sha256 so the download must fail.
+	manifestPath := filepath.Join(bucket, name, snapshot.ManifestFilename)
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	corrupted := bytes.Replace(raw,
+		[]byte(`"sha256": "`),
+		[]byte(`"sha256": "ffffffff`),
+		1,
+	)
+	if err := os.WriteFile(manifestPath, corrupted, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// A non-empty datadir to prove --force preserves the original on failure.
+	mustWrite(t, filepath.Join(dstDataDir, "geth", "preexisting.txt"), []byte("keep me"))
+
+	_, err = download.Run(ctx, be, "", download.Options{
+		DataDir: dstDataDir,
+		Name:    name,
+		Force:   true,
+	})
+	if err == nil {
+		t.Fatalf("expected download to fail on tampered sha256")
+	}
+
+	// The original geth/preexisting.txt must still be there.
+	got, err := os.ReadFile(filepath.Join(dstDataDir, "geth", "preexisting.txt"))
+	if err != nil {
+		t.Fatalf("preexisting file lost after failed atomic download: %v", err)
+	}
+	if string(got) != "keep me" {
+		t.Errorf("preexisting file changed: got %q", got)
+	}
+
+	// And there should be no leftover partial directory.
+	entries, err := os.ReadDir(dstDataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".ferry-partial-") {
+			t.Errorf("scratch directory %q not cleaned up after failure", e.Name())
+		}
+	}
+}
+
+// TestUploadAbortsPartialPart proves that a tar-side failure during upload
+// does not leave a committed-but-corrupt part on the remote. We trigger
+// the failure by deleting a file from the datadir mid-walk would be
+// racy; simpler: validate the post-condition by checking that absent a
+// manifest the bucket has no .tar.zst objects we'd mistake for a snapshot.
+// Real coverage of the Abort path comes from file_test.go.
+func TestUploadAbortsPartialPartViaUnexpectedAncient(t *testing.T) {
+	tmp := t.TempDir()
+	srcDataDir := filepath.Join(tmp, "src")
+	bucket := filepath.Join(tmp, "bucket")
+
+	makeFakeDatadir(t, srcDataDir)
+	// Inject a rogue freezer namespace — same trigger as the
+	// existing TestUploadRefusesUnexpectedAncientEntry but we additionally
+	// check that *no* part object leaked into the bucket.
+	mustMkdir(t, filepath.Join(srcDataDir, "geth", "chaindata", "ancient", "logs"))
+	mustWrite(t, filepath.Join(srcDataDir, "geth", "chaindata", "ancient", "logs", "anything.cdat"), randomBytes(t, 1024))
+
+	be, err := file.New(bucket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "geth-1-archive-100-1746014400"
+	_, err = upload.Run(context.Background(), be, "", upload.Options{
+		DataDir: srcDataDir,
+		Name:    name,
+		Role:    snapshot.RoleArchive,
+		Block:   100,
+		ChainID: 1,
+		Force:   true,
+	})
+	if err == nil {
+		t.Fatalf("upload should have refused unexpected ancient/ entry")
+	}
+	// Validate no .tar.zst left under <bucket>/<name>/.
+	snapDir := filepath.Join(bucket, name)
+	if entries, statErr := os.ReadDir(snapDir); statErr == nil {
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			if strings.HasSuffix(e.Name(), ".tar.zst") {
+				t.Errorf("aborted upload left committed part %q", e.Name())
+			}
+		}
 	}
 }
 
