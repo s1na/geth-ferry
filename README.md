@@ -85,16 +85,29 @@ Flags:
 | `--chain-id` | auto | EVM chain id; read from rawdb chain config if unset |
 | `--level` | `5` | zstd level (1-22; ≥ 10 forces single-threaded streaming in klauspost/compress) |
 | `--threads` | GOMAXPROCS | zstd encoder threads |
+| `--parallel-parts` | `1` | snapshot parts to upload concurrently (each part owns its own multipart buffer set; peak memory scales linearly — see Tuning) |
+| `--multipart-size` | `0` (= 256 MiB) | S3 multipart part size, bytes. With S3's 10 000-part cap, the default caps a single object at ~2.5 TiB |
+| `--multipart-concurrency` | `0` (= 5) | max in-flight UploadPart requests per object |
 | `--force` | `false` | ignore preflight LOCK / .ipc check |
 | `--quiet` | `false` | suppress periodic progress output on stderr |
 | `--dry-run` | `false` | print the planned upload (parts, source bytes, destination keys) and exit without writing anything |
 
-Resume of an interrupted upload is **not** supported in v1: rerun starts the
+Resume of an interrupted upload is **not** supported: rerun starts the
 failed part over. Run inside `tmux` / `screen` like the legacy runbook does.
+Ctrl+C is honored — in-flight S3 multipart uploads are aborted on the
+remote so they don't squat as orphaned parts.
 
-Use `--dry-run` to confirm what ferry plans to do — the auto-detected name,
-the per-part source sizes and file counts, and the destination keys —
-without committing to the multi-hour streamer.
+Use `--dry-run` to confirm what ferry plans to do — the auto-detected
+name, the per-part source sizes and file counts, and the destination
+keys — without committing to the multi-hour streamer. The walk runs all
+parts in parallel.
+
+Progress lines on stderr show throughput and (when `--dry-run` first
+established the total) an ETA:
+
+```
+[chaindata-live] 124.32 GiB / 2.18 TiB (5.6%) ETA 3h41m in 12m38s (167.94 MiB/s)
+```
 
 ## Download
 
@@ -124,23 +137,71 @@ Flags:
 |------|---------|-------|
 | `--src` | (required) | snapshot URL (directory) or legacy single-file URL |
 | `--dst` | (required) | datadir to extract into |
-| `--force` | `false` | extract into a non-empty `<dst>/geth/` |
+| `--force` | `false` | replace an existing `<dst>/geth/` (atomic — see below) |
 | `--quiet` | `false` | suppress periodic progress output on stderr |
+| `--parallel-parts` | `1` | snapshot parts to download concurrently (1 = sequential). Manifest snapshots only; ignored for legacy single-file URLs |
+
+Extraction is atomic: parts land in `<dst>/.ferry-partial-*/` and are
+renamed into place only after every part has been downloaded and
+sha256-verified. A failed download leaves no partial state behind. With
+`--force`, the original `<dst>/geth/` is removed *only at the moment of
+promote*, never midway — so a mid-stream failure preserves your existing
+datadir intact.
 
 ## Other commands
 
 ```
-ferry inspect  <local-or-remote>     # print manifest.json
-ferry list     --src <prefix-url>    # tabular list of snapshots under a prefix
-ferry verify   --src <snapshot-url>  # re-fetch each part and check sha256
-ferry contents --src <snapshot-url>  # list files inside the snapshot's parts (cheap)
+ferry inspect  <local-or-remote>            # print manifest.json (JSON output by default)
+ferry list     --src <prefix-url>           # snapshots under a prefix (text columns; --json for scripts)
+ferry verify   --src <snapshot-url>         # deep: re-fetch every part, recompute sha256
+ferry verify   --src <snapshot-url> --quick # cheap: HEAD each part, compare size only
+ferry contents --src <snapshot-url>         # list files inside the snapshot's parts (cheap)
 ```
+
+`ferry list --json` emits an array of objects with one entry per
+snapshot — `name`, `chain_id`, `role`, `block`, `timestamp`, `total_size` —
+suitable for piping into `jq`.
+
+`ferry verify` defaults to a *deep* check: every part is re-downloaded
+and its sha256 recomputed against the manifest. For periodic monitoring
+or pre-flight sanity checks where re-downloading TBs of data is too
+expensive, `--quick` HEADs each part and compares the remote object's
+size to `manifest.compressed_size` — kilobytes of metadata per part.
+Quick mode catches "part missing or truncated"; only deep mode catches
+silent corruption.
 
 `ferry contents` reads the manifest plus a small sidecar (`parts/<n>.toc.zst`)
 written alongside each part at upload time — typically a few KB to a couple
 of MB total. It does **not** read the parts themselves, so listing a 350 GB
 snapshot answers in seconds. Snapshots produced by older ferry versions
 that don't have TOCs are flagged in the output.
+
+## Tuning
+
+The S3 multipart upload uses two knobs that interact with host memory:
+
+- `--multipart-size` (default 256 MiB): per-part buffer size.
+- `--multipart-concurrency` (default 5): in-flight UploadPart requests
+  per object.
+
+Steady-state memory per `Put` is roughly `concurrency × multipart-size`
+(~1.25 GiB at the defaults). Buffers are recycled via a `sync.Pool`, so
+the figure is a ceiling, not a per-part allocation. With
+`--parallel-parts N`, multiply by N — each in-flight part owns its own
+buffer set.
+
+On the OVH m5.2xlarge with 16 GiB of RAM that ferry was developed
+against, the default tuning is comfortable. Smaller hosts should lower
+both, e.g.:
+
+```
+ferry upload ... --multipart-size $((64*1024*1024)) --multipart-concurrency 2
+```
+
+`--parallel-parts > 1` does not currently improve wall-clock for typical
+mainnet snapshots because `chaindata-live` dominates total bytes; the
+flag is plumbed end-to-end and worth experimenting with, but treat
+default 1 as the steady-state choice until you've measured.
 
 ## Backends
 

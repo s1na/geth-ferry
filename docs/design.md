@@ -218,10 +218,54 @@ github.com/s1na/geth-ferry
 - Refuse to upload if `<datadir>/geth/LOCK` or `<datadir>/geth/geth.ipc`
   exists. Override with `--force`.
 - Refuse to download into a non-empty `<datadir>/geth/`. Override with
-  `--force`.
+  `--force` — semantically *replace* (not merge): a successful run
+  atomically swaps a freshly-extracted tree into place; a failed run
+  leaves the original untouched.
 - Tar extraction rejects entries that would escape the destination
   (`..`-relative paths, absolute symlinks). Device files, fifos, and
   hard links are silently skipped — geth doesn't need them.
+- Ctrl+C (SIGINT/SIGTERM) cancels the root context. Backends propagate:
+  in-flight S3 multipart uploads are `AbortMultipartUpload`'d with a
+  fresh background context (so the abort RPC reaches the server even
+  though the request context is cancelled); download scratch
+  directories are removed.
+
+## Atomicity
+
+**Upload.** Each part is a single multipart upload. The writer hands the
+caller two terminators: `Close` commits (`CompleteMultipartUpload`) and
+`Abort` discards (`AbortMultipartUpload`). The upload code defers
+`Abort` and only sets a `committed` flag after `Close` returns nil — so
+any mid-stream failure (tar walk, zstd encode, network) leaves no
+committed object on the bucket. The manifest is written last; its
+absence is the integrity signal.
+
+**Download.** Parts are extracted into a hidden scratch directory
+(`.ferry-partial-*/`) next to `<datadir>/geth/`. After every part has
+streamed and its sha256 has been verified, the scratch is renamed into
+`<datadir>/geth/`. Same-filesystem rename ensures atomicity; with
+`--force`, the original tree is removed only at this final promote
+step, so a failure midway preserves it.
+
+## Concurrency
+
+Two independent dials:
+
+- `--multipart-concurrency` (per object): in-flight `UploadPart`
+  requests for a single multipart upload. Default 5. Each in-flight
+  part borrows a `--multipart-size` buffer from a per-Backend
+  `sync.Pool`, so steady-state allocation is concurrency × part-size
+  regardless of how many parts the object turns into.
+- `--parallel-parts` (per snapshot): how many of the snapshot's parts
+  upload (or download) concurrently. Default 1 (the historical
+  sequential behavior). With `N > 1`, peak memory scales linearly
+  because each in-flight part owns its own multipart buffer set.
+
+Parallel parts are write-disjoint by construction: `chaindata-live`
+covers `chaindata/` minus `ancient/`; `ancient-chain` covers
+`chaindata/ancient/chain/`; `ancient-state` covers
+`chaindata/ancient/state/`; `triedb` covers `triedb/`. No part writes
+into another's namespace, so concurrent extraction is race-free.
 
 ## Dependencies
 
