@@ -92,6 +92,9 @@ func (b *Backend) List(ctx context.Context, prefix string) ([]backend.Object, er
 func (b *Backend) Stat(ctx context.Context, key string) (backend.Object, error) {
 	info, err := os.Stat(b.abs(key))
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return backend.Object{}, fmt.Errorf("stat %s: %w", key, backend.ErrNotExist)
+		}
 		return backend.Object{}, err
 	}
 	return backend.Object{
@@ -102,12 +105,20 @@ func (b *Backend) Stat(ctx context.Context, key string) (backend.Object, error) 
 }
 
 func (b *Backend) Get(ctx context.Context, key string) (io.ReadCloser, error) {
-	return os.Open(b.abs(key))
+	f, err := os.Open(b.abs(key))
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("get %s: %w", key, backend.ErrNotExist)
+		}
+		return nil, err
+	}
+	return f, nil
 }
 
-// Put writes to a temp file alongside the destination, then atomically renames
-// on Close. A failed upload leaves no partial object visible.
-func (b *Backend) Put(ctx context.Context, key string) (io.WriteCloser, error) {
+// Put writes to a temp file alongside the destination, then atomically
+// renames on Close. A writer that is Abort()'d (or never terminated) leaves
+// no partial object visible.
+func (b *Backend) Put(ctx context.Context, key string) (backend.Writer, error) {
 	dst := b.abs(key)
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return nil, err
@@ -127,10 +138,13 @@ func (b *Backend) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
+// atomicFile buffers writes to a temp file next to the destination. Close
+// renames into place; Abort closes and removes the temp file. Either method
+// is idempotent; calling one disables the other.
 type atomicFile struct {
 	f         *os.File
 	finalPath string
-	closed    bool
+	done      bool
 }
 
 func (a *atomicFile) Write(p []byte) (int, error) {
@@ -138,10 +152,10 @@ func (a *atomicFile) Write(p []byte) (int, error) {
 }
 
 func (a *atomicFile) Close() error {
-	if a.closed {
+	if a.done {
 		return nil
 	}
-	a.closed = true
+	a.done = true
 	if err := a.f.Close(); err != nil {
 		_ = os.Remove(a.f.Name())
 		return err
@@ -151,4 +165,13 @@ func (a *atomicFile) Close() error {
 		return err
 	}
 	return nil
+}
+
+func (a *atomicFile) Abort() {
+	if a.done {
+		return
+	}
+	a.done = true
+	_ = a.f.Close()
+	_ = os.Remove(a.f.Name())
 }

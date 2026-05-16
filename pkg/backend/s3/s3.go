@@ -25,6 +25,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -205,6 +206,9 @@ func (b *Backend) Stat(ctx context.Context, key string) (backend.Object, error) 
 		Key:    &full,
 	})
 	if err != nil {
+		if isNotFound(err) {
+			return backend.Object{}, fmt.Errorf("head %s: %w", full, backend.ErrNotExist)
+		}
 		return backend.Object{}, fmt.Errorf("head %s: %w", full, err)
 	}
 	res := backend.Object{Key: key}
@@ -227,6 +231,9 @@ func (b *Backend) Get(ctx context.Context, key string) (io.ReadCloser, error) {
 		Key:    &full,
 	})
 	if err != nil {
+		if isNotFound(err) {
+			return nil, fmt.Errorf("get %s: %w", full, backend.ErrNotExist)
+		}
 		return nil, fmt.Errorf("get %s: %w", full, err)
 	}
 	return out.Body, nil
@@ -244,7 +251,11 @@ const MultipartConcurrency = 5
 // byte buffer with an explicit ContentLength and an inline Crc32 header;
 // no aws-chunked encoding, no trailers — keeps OVH and other strict S3
 // implementations happy.
-func (b *Backend) Put(ctx context.Context, key string) (io.WriteCloser, error) {
+//
+// The returned Writer must be terminated by Close (commit) or Abort
+// (discard); abandoning it leaks an in-progress multipart upload on the
+// remote bucket until the bucket's lifecycle policy reaps it.
+func (b *Backend) Put(ctx context.Context, key string) (backend.Writer, error) {
 	full := b.fullKey(key)
 	out, err := b.client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
 		Bucket: &b.bucket,
@@ -293,9 +304,15 @@ func isNotFound(err error) bool {
 	return false
 }
 
-// multipartWriter implements io.WriteCloser by buffering up to partSize
+// multipartWriter implements backend.Writer by buffering up to partSize
 // bytes and dispatching each filled buffer as an UploadPart in a worker
 // goroutine. Up to MultipartConcurrency parts are in flight at once.
+//
+// Termination is via either Close (commit — CompleteMultipartUpload) or
+// Abort (discard — AbortMultipartUpload, using a fresh context so it
+// completes even when the caller's context is cancelled). Calling one
+// disables the other; calling neither leaks an in-progress upload on the
+// bucket.
 type multipartWriter struct {
 	ctx      context.Context
 	client   *s3.Client
@@ -314,7 +331,7 @@ type multipartWriter struct {
 	parts  []s3types.CompletedPart
 	failed error // first part-upload error wins
 
-	closed bool
+	done bool // true once Close or Abort has run
 }
 
 func (w *multipartWriter) Write(p []byte) (int, error) {
@@ -407,22 +424,25 @@ func (w *multipartWriter) uploadOnePart(pn int32, body []byte) {
 	w.mu.Unlock()
 }
 
+// Close finalizes the multipart upload. On any error (including
+// previously-recorded part-upload errors), the upload is aborted before
+// returning.
 func (w *multipartWriter) Close() error {
-	if w.closed {
+	if w.done {
 		return nil
 	}
-	w.closed = true
+	w.done = true
 
 	// Flush whatever's still buffered as the final (potentially small) part.
 	flushErr := w.dispatchBuffered()
 	w.wg.Wait()
 
 	if err := w.peekErr(); err != nil {
-		w.abort()
+		w.abortRemote()
 		return err
 	}
 	if flushErr != nil {
-		w.abort()
+		w.abortRemote()
 		return flushErr
 	}
 
@@ -437,17 +457,37 @@ func (w *multipartWriter) Close() error {
 		UploadId:        &w.uploadID,
 		MultipartUpload: &s3types.CompletedMultipartUpload{Parts: w.parts},
 	}); err != nil {
-		w.abort()
+		w.abortRemote()
 		return fmt.Errorf("complete multipart %s: %w", w.key, err)
 	}
 	return nil
 }
 
-// abort tries to clean up an in-progress multipart upload after a failure.
-// Best-effort: we already have an error to return; abort failures are
-// silent because there's nothing useful to do with them here.
-func (w *multipartWriter) abort() {
-	_, _ = w.client.AbortMultipartUpload(w.ctx, &s3.AbortMultipartUploadInput{
+// Abort discards any in-flight or buffered bytes and asks S3 to forget the
+// multipart upload. Safe to call multiple times; safe to call when w.ctx
+// is already cancelled (uses a fresh background context with a short
+// timeout so the AbortMultipartUpload RPC can still reach the server).
+func (w *multipartWriter) Abort() {
+	if w.done {
+		return
+	}
+	w.done = true
+	// Stop accepting new dispatches via the next peekErr; mark failure so
+	// any in-flight workers wind down without recording extra errors.
+	w.recordErr(errAborted)
+	w.wg.Wait()
+	w.abortRemote()
+}
+
+var errAborted = errors.New("upload aborted")
+
+// abortRemote tells S3 to forget the multipart upload. Best-effort: the
+// caller is already on a teardown path. Uses a fresh context with a short
+// timeout so an upstream cancellation (Ctrl+C) doesn't prevent cleanup.
+func (w *multipartWriter) abortRemote() {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	_, _ = w.client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
 		Bucket:   &w.bucket,
 		Key:      &w.key,
 		UploadId: &w.uploadID,
