@@ -11,7 +11,11 @@ import (
 	_ "github.com/s1na/geth-ferry/pkg/backend/s3"
 )
 
-const version = "0.1.0"
+// version is the binary's reported version, used both by `ferry --version`
+// and as the `created_by` field on uploaded manifests. Override at build
+// time with `-ldflags "-X main.version=<v>"`; defaults to "dev" so a plain
+// `go build` produces something obviously not a release.
+var version = "dev"
 
 func main() {
 	root := &cobra.Command{

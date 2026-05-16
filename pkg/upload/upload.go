@@ -47,7 +47,9 @@ type Options struct {
 	// Threads is the zstd encoder thread count. Zero uses the library default.
 	Threads int
 
-	// CreatedBy is recorded in the manifest. Default "ferry/<version>".
+	// CreatedBy is recorded in the manifest. Callers should set this to
+	// their tool name and version, e.g. "ferry/0.2.0"; unset becomes
+	// "ferry/unknown".
 	CreatedBy string
 
 	// Force skips the LOCK / .ipc safety check.
@@ -70,7 +72,7 @@ func Run(ctx context.Context, dst backend.Backend, prefix string, opts Options) 
 		opts.Level = codec.DefaultZstdLevel
 	}
 	if opts.CreatedBy == "" {
-		opts.CreatedBy = "ferry/0.1.0"
+		opts.CreatedBy = "ferry/unknown"
 	}
 
 	gethDir := filepath.Join(opts.DataDir, "geth")
