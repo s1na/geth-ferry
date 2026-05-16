@@ -232,8 +232,11 @@ func (b *Backend) Get(ctx context.Context, key string) (io.ReadCloser, error) {
 	return out.Body, nil
 }
 
-// MultipartConcurrency is the number of UploadPart requests in flight
-// at once during a single Put.
+// MultipartConcurrency is the number of UploadPart requests in flight at
+// once during a single Put. Each in-flight part owns one MultipartPartSize
+// buffer, so peak memory per Put is roughly MultipartConcurrency ×
+// MultipartPartSize (~1.25 GiB at the defaults). Tune both down on
+// memory-constrained hosts.
 const MultipartConcurrency = 5
 
 // Put returns a streaming writer backed by an S3 multipart upload that we

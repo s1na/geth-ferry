@@ -153,4 +153,3 @@ func (discardLogger) Fatalf(format string, args ...interface{}) {
 	// rather than silently dropping it.
 	panic(fmt.Sprintf(format, args...))
 }
-
