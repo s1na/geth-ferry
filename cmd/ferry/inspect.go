@@ -19,11 +19,7 @@ func inspectCmd() *cobra.Command {
 		Short: "Print a snapshot's manifest.json without touching its parts",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := cmd.Context()
-			if ctx == nil {
-				ctx = context.Background()
-			}
-			m, err := loadManifest(ctx, args[0])
+			m, err := loadManifest(cmd.Context(), args[0])
 			if err != nil {
 				return err
 			}

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"io/fs"
@@ -9,6 +8,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -22,21 +22,19 @@ import (
 
 func uploadCmd() *cobra.Command {
 	var (
-		src, dst, name string
-		role           string
-		block, chainID uint64
-		level, threads int
-		force, quiet   bool
-		dryRun         bool
+		src, dst, name                                 string
+		role                                           string
+		block, chainID                                 uint64
+		level, threads                                 int
+		force, quiet                                   bool
+		dryRun                                         bool
+		multipartSize, multipartConcurrency, parallelN int
 	)
 	cmd := &cobra.Command{
 		Use:   "upload",
 		Short: "Upload a stopped node's datadir to a remote",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			if ctx == nil {
-				ctx = context.Background()
-			}
 
 			// Auto-detect any of name/block/chain-id that the user didn't pass.
 			nameSet := cmd.Flags().Changed("name")
@@ -65,7 +63,10 @@ func uploadCmd() *cobra.Command {
 				return printPlan(os.Stdout, src, dst, name, role, block, chainID, level, threads)
 			}
 
-			be, prefix, err := backend.Open(dst)
+			be, prefix, err := backend.Open(dst,
+				backend.WithMultipartPartSize(multipartSize),
+				backend.WithMultipartConcurrency(multipartConcurrency),
+			)
 			if err != nil {
 				return err
 			}
@@ -74,16 +75,17 @@ func uploadCmd() *cobra.Command {
 				progressOut = nil
 			}
 			m, err := upload.Run(ctx, be, prefix, upload.Options{
-				DataDir:   src,
-				Name:      name,
-				Role:      snapshot.Role(role),
-				Block:     block,
-				ChainID:   chainID,
-				Level:     level,
-				Threads:   threads,
-				CreatedBy: "ferry/" + version,
-				Force:     force,
-				Progress:  progressOut,
+				DataDir:       src,
+				Name:          name,
+				Role:          snapshot.Role(role),
+				Block:         block,
+				ChainID:       chainID,
+				Level:         level,
+				Threads:       threads,
+				CreatedBy:     "ferry/" + version,
+				Force:         force,
+				Progress:      progressOut,
+				ParallelParts: parallelN,
 			})
 			if err != nil {
 				return err
@@ -107,6 +109,9 @@ func uploadCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&force, "force", false, "ignore preflight LOCK / .ipc check")
 	cmd.Flags().BoolVar(&quiet, "quiet", false, "suppress periodic progress output")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the planned upload (parts, source bytes, destination keys) and exit without writing anything")
+	cmd.Flags().IntVar(&multipartSize, "multipart-size", 0, "S3 multipart part size in bytes (0 = backend default, 256 MiB)")
+	cmd.Flags().IntVar(&multipartConcurrency, "multipart-concurrency", 0, "max in-flight UploadPart requests per object (0 = backend default, 5)")
+	cmd.Flags().IntVar(&parallelN, "parallel-parts", 1, "number of snapshot parts to upload in parallel (1 = sequential)")
 	for _, name := range []string{"src", "dst", "role"} {
 		_ = cmd.MarkFlagRequired(name)
 	}
@@ -151,30 +156,50 @@ func printPlan(out io.Writer, src, dst, name, role string, block, chainID uint64
 		},
 	}
 
+	// Pre-check optional parts so the walks below can run in parallel
+	// without each goroutine having to do its own existence check.
 	for i := range parts {
 		switch parts[i].key {
-		case snapshot.ChaindataLivePart:
-			parts[i].fileCount, parts[i].uncompBytes = walkSize(filepath.Join(gethDir, "chaindata"), func(rel string) bool {
-				return rel == "ancient" || strings.HasPrefix(rel, "ancient/")
-			})
-		case snapshot.AncientChainPart:
-			parts[i].fileCount, parts[i].uncompBytes = walkSize(filepath.Join(gethDir, "chaindata", "ancient", "chain"), nil)
 		case snapshot.AncientStatePart:
-			dir := filepath.Join(gethDir, "chaindata", "ancient", "state")
-			if _, err := os.Stat(dir); err != nil {
+			if _, err := os.Stat(filepath.Join(gethDir, "chaindata", "ancient", "state")); err != nil {
 				parts[i].skipReason = "no ancient/state/ on disk"
-				break
 			}
-			parts[i].fileCount, parts[i].uncompBytes = walkSize(dir, nil)
 		case snapshot.TriedbPart:
-			dir := filepath.Join(gethDir, "triedb")
-			if _, err := os.Stat(dir); err != nil {
+			if _, err := os.Stat(filepath.Join(gethDir, "triedb")); err != nil {
 				parts[i].skipReason = "no triedb/ on disk (HBSS)"
-				break
 			}
-			parts[i].fileCount, parts[i].uncompBytes = walkSize(dir, nil)
 		}
 	}
+
+	// Walk each part's source tree in parallel — metadata-only, IO-bound
+	// on the filesystem. On a 350 GB datadir this turns a serial walk
+	// dominated by the live + ancient-chain trees into something closer
+	// to max(live, ancient-chain) wall-clock.
+	var wg sync.WaitGroup
+	for i := range parts {
+		if parts[i].skipReason != "" {
+			continue
+		}
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			switch parts[i].key {
+			case snapshot.ChaindataLivePart:
+				parts[i].fileCount, parts[i].uncompBytes = walkSize(
+					filepath.Join(gethDir, "chaindata"),
+					func(rel string) bool {
+						return rel == "ancient" || strings.HasPrefix(rel, "ancient/")
+					})
+			case snapshot.AncientChainPart:
+				parts[i].fileCount, parts[i].uncompBytes = walkSize(filepath.Join(gethDir, "chaindata", "ancient", "chain"), nil)
+			case snapshot.AncientStatePart:
+				parts[i].fileCount, parts[i].uncompBytes = walkSize(filepath.Join(gethDir, "chaindata", "ancient", "state"), nil)
+			case snapshot.TriedbPart:
+				parts[i].fileCount, parts[i].uncompBytes = walkSize(filepath.Join(gethDir, "triedb"), nil)
+			}
+		}(i)
+	}
+	wg.Wait()
 
 	if level == 0 {
 		level = 5

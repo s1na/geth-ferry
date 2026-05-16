@@ -1,7 +1,7 @@
 package main
 
 import (
-	"context"
+	"encoding/json"
 	"fmt"
 	"path"
 	"sort"
@@ -16,16 +16,27 @@ import (
 	"github.com/s1na/geth-ferry/pkg/snapshot"
 )
 
+// listEntry is the structured form of one row in `ferry list`. Used for
+// JSON output; the text formatter renders it as columns.
+type listEntry struct {
+	Name      string `json:"name"`
+	ChainID   uint64 `json:"chain_id,omitempty"`
+	Role      string `json:"role,omitempty"`
+	Block     uint64 `json:"block,omitempty"`
+	Timestamp int64  `json:"timestamp,omitempty"` // Unix seconds; 0 if name is unparseable
+	TotalSize int64  `json:"total_size"`          // sum of object sizes under the snapshot prefix
+}
+
 func listCmd() *cobra.Command {
-	var src string
+	var (
+		src     string
+		jsonOut bool
+	)
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List snapshots under a remote prefix",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			if ctx == nil {
-				ctx = context.Background()
-			}
 			be, prefix, err := backend.Open(src)
 			if err != nil {
 				return err
@@ -35,64 +46,82 @@ func listCmd() *cobra.Command {
 				return err
 			}
 
-			// Find manifest.json files and group by their containing snapshot
-			// directory. The snapshot name is the path component immediately
-			// before the manifest file.
-			type entry struct {
-				name      string
-				totalSize int64
-			}
-			byName := map[string]*entry{}
-			for _, o := range objs {
-				rel := strings.TrimPrefix(o.Key, prefix)
-				if path.Base(rel) != snapshot.ManifestFilename {
-					continue
-				}
-				name := path.Base(path.Dir(rel))
-				if name == "" || name == "." || name == "/" {
-					continue
-				}
-				byName[name] = &entry{name: name}
-			}
-			// Second pass: sum part sizes per snapshot.
-			for _, o := range objs {
-				rel := strings.TrimPrefix(o.Key, prefix)
-				dir, _ := path.Split(strings.TrimPrefix(rel, "/"))
-				dir = strings.TrimSuffix(dir, "/")
-				// dir might be "name" or "name/parts" — strip trailing parts/.
-				name := dir
-				if i := strings.LastIndex(dir, "/"); i >= 0 {
-					name = dir[:i]
-				}
-				if e, ok := byName[name]; ok {
-					e.totalSize += o.Size
-				}
-			}
+			entries := groupSnapshots(objs, prefix)
+			sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
 
-			names := make([]string, 0, len(byName))
-			for n := range byName {
-				names = append(names, n)
+			if jsonOut {
+				enc := json.NewEncoder(cmd.OutOrStdout())
+				enc.SetIndent("", "  ")
+				return enc.Encode(entries)
 			}
-			sort.Strings(names)
 
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
 			defer tw.Flush()
 			fmt.Fprintln(tw, "NAME\tCHAIN\tROLE\tBLOCK\tDATE\tSIZE")
-			for _, n := range names {
-				e := byName[n]
-				meta, err := snapshot.ParseName(n)
-				if err != nil {
-					fmt.Fprintf(tw, "%s\t-\t-\t-\t-\t%s\n", n, progress.HumanBytes(e.totalSize))
+			for _, e := range entries {
+				if e.Timestamp == 0 {
+					fmt.Fprintf(tw, "%s\t-\t-\t-\t-\t%s\n", e.Name, progress.HumanBytes(e.TotalSize))
 					continue
 				}
 				fmt.Fprintf(tw, "%s\t%d\t%s\t%d\t%s\t%s\n",
-					n, meta.ChainID, meta.Role, meta.Block,
-					time.Unix(meta.Timestamp, 0).UTC().Format("2006-01-02"), progress.HumanBytes(e.totalSize))
+					e.Name, e.ChainID, e.Role, e.Block,
+					time.Unix(e.Timestamp, 0).UTC().Format("2006-01-02"),
+					progress.HumanBytes(e.TotalSize))
 			}
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&src, "src", "", "remote prefix URL (required)")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit machine-readable JSON instead of tab-aligned columns")
 	_ = cmd.MarkFlagRequired("src")
 	return cmd
+}
+
+// groupSnapshots reduces the flat object list into one row per snapshot.
+// A "snapshot" is identified by the presence of a manifest.json under
+// <prefix>/<name>/; objects under <prefix>/<name>/parts/* contribute to
+// that row's TotalSize.
+func groupSnapshots(objs []backend.Object, prefix string) []listEntry {
+	byName := map[string]*listEntry{}
+
+	// Pass 1: discover snapshot names via manifest.json sightings.
+	for _, o := range objs {
+		rel := strings.TrimPrefix(o.Key, prefix)
+		if path.Base(rel) != snapshot.ManifestFilename {
+			continue
+		}
+		name := path.Base(path.Dir(rel))
+		if name == "" || name == "." || name == "/" {
+			continue
+		}
+		e := &listEntry{Name: name}
+		if meta, err := snapshot.ParseName(name); err == nil {
+			e.ChainID = meta.ChainID
+			e.Role = string(meta.Role)
+			e.Block = meta.Block
+			e.Timestamp = meta.Timestamp
+		}
+		byName[name] = e
+	}
+
+	// Pass 2: attribute object sizes back to the discovered snapshots.
+	// Object keys look like "<prefix><name>/manifest.json" or
+	// "<prefix><name>/parts/<file>"; the first slash-segment after the
+	// prefix is the snapshot name.
+	for _, o := range objs {
+		rel := strings.TrimPrefix(strings.TrimPrefix(o.Key, prefix), "/")
+		name, _, found := strings.Cut(rel, "/")
+		if !found || name == "" {
+			continue
+		}
+		if e, ok := byName[name]; ok {
+			e.TotalSize += o.Size
+		}
+	}
+
+	out := make([]listEntry, 0, len(byName))
+	for _, e := range byName {
+		out = append(out, *e)
+	}
+	return out
 }

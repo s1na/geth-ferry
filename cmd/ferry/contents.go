@@ -26,9 +26,6 @@ Network/disk cost: ~kilobytes per part. The parts themselves are not read.
 Snapshots produced by older ferry versions (no TOCs) are flagged.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			if ctx == nil {
-				ctx = context.Background()
-			}
 
 			rootURL, name, err := snapshot.SplitTrailingSegment(src)
 			if err != nil {
