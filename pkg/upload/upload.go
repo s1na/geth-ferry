@@ -298,13 +298,14 @@ func uploadPart(ctx context.Context, be backend.Backend, req partRequest) (snaps
 	if err != nil {
 		return snapshot.Part{}, err
 	}
-	// On any error we close bw to release whatever resources it holds; on
-	// success we return the bw.Close error to the caller (so they see e.g.
-	// a multipart finalize failure).
-	closed := false
+	// Abort by default; only commit (Close) once we've finished writing and
+	// validated everything. Without this, a tar / zstd / fs error mid-stream
+	// would still flush whatever bytes were buffered and CompleteMultipart-
+	// Upload them — committing a corrupt object to the bucket.
+	committed := false
 	defer func() {
-		if !closed {
-			_ = bw.Close()
+		if !committed {
+			bw.Abort()
 		}
 	}()
 
@@ -338,10 +339,10 @@ func uploadPart(ctx context.Context, be backend.Backend, req partRequest) (snaps
 	if err := zstdEnc.Close(); err != nil {
 		return snapshot.Part{}, fmt.Errorf("close zstd: %w", err)
 	}
-	closed = true
 	if err := bw.Close(); err != nil {
 		return snapshot.Part{}, fmt.Errorf("close backend writer: %w", err)
 	}
+	committed = true
 
 	tocRef, err := uploadTOC(ctx, be, req, entries)
 	if err != nil {
@@ -375,10 +376,10 @@ func uploadTOC(ctx context.Context, be backend.Backend, req partRequest, entries
 	if err != nil {
 		return nil, err
 	}
-	closed := false
+	committed := false
 	defer func() {
-		if !closed {
-			_ = bw.Close()
+		if !committed {
+			bw.Abort()
 		}
 	}()
 
@@ -397,10 +398,10 @@ func uploadTOC(ctx context.Context, be backend.Backend, req partRequest, entries
 	if err := enc.Close(); err != nil {
 		return nil, fmt.Errorf("close toc zstd: %w", err)
 	}
-	closed = true
 	if err := bw.Close(); err != nil {
 		return nil, fmt.Errorf("close toc backend writer: %w", err)
 	}
+	committed = true
 	return &snapshot.TOCRef{
 		Name:    tocPath,
 		Size:    counter.n,
@@ -494,16 +495,24 @@ func writeManifest(ctx context.Context, be backend.Backend, prefix, name string,
 	if err != nil {
 		return err
 	}
+	committed := false
+	defer func() {
+		if !committed {
+			w.Abort()
+		}
+	}()
 	var buf bytes.Buffer
 	if err := m.Encode(&buf); err != nil {
-		_ = w.Close()
 		return err
 	}
 	if _, err := io.Copy(w, &buf); err != nil {
-		_ = w.Close()
 		return err
 	}
-	return w.Close()
+	if err := w.Close(); err != nil {
+		return err
+	}
+	committed = true
+	return nil
 }
 
 type countWriter struct {
