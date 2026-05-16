@@ -1,19 +1,30 @@
 # geth-ferry
 
+[![CI](https://github.com/s1na/geth-ferry/actions/workflows/ci.yml/badge.svg)](https://github.com/s1na/geth-ferry/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Go Reference](https://pkg.go.dev/badge/github.com/s1na/geth-ferry.svg)](https://pkg.go.dev/github.com/s1na/geth-ferry)
+
 A small Go tool that uploads and downloads geth datadir snapshots between a
 node host and an S3-compatible object store. Replaces a manual
 `tar | zstd | s3cmd` runbook with something that has a manifest, sha256
 verification, and a sane CLI.
 
-The design plan lives in [`PLAN.md`](PLAN.md).
+The longer design write-up lives in [`docs/design.md`](docs/design.md).
 
 ## Build
 
+Requires Go 1.24+. No CGO.
+
 ```
-go build ./cmd/ferry
+make build              # produces ./ferry, version derived from `git describe`
+make build VERSION=0.2.0
 ```
 
-Requires Go 1.24+. No CGO.
+Or, without make:
+
+```
+go build -ldflags "-X main.version=$(git describe --tags --always --dirty)" ./cmd/ferry
+```
 
 ## Snapshot layout
 
