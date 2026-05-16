@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/spf13/cobra"
 
@@ -18,6 +21,14 @@ import (
 var version = "dev"
 
 func main() {
+	// Cancel the root context on SIGINT/SIGTERM. Backends propagate the
+	// cancellation: in-flight S3 multipart uploads get aborted (with a
+	// fresh context, so the abort RPC still reaches the server), download
+	// extraction wipes its scratch directory, no half-state is left on
+	// either end.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	root := &cobra.Command{
 		Use:           "ferry",
 		Short:         "Upload and download geth datadir snapshots",
@@ -27,7 +38,7 @@ func main() {
 	}
 	root.AddCommand(uploadCmd(), downloadCmd(), inspectCmd(), listCmd(), verifyCmd(), contentsCmd())
 
-	if err := root.Execute(); err != nil {
+	if err := root.ExecuteContext(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, "ferry:", err)
 		os.Exit(1)
 	}
