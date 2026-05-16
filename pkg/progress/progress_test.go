@@ -45,8 +45,8 @@ func TestHumanBytes(t *testing.T) {
 		1024*1024*3 + 12: "3.00 MiB",
 	}
 	for in, want := range cases {
-		if got := humanBytes(in); got != want {
-			t.Errorf("humanBytes(%d) = %q, want %q", in, got, want)
+		if got := HumanBytes(in); got != want {
+			t.Errorf("HumanBytes(%d) = %q, want %q", in, got, want)
 		}
 	}
 }

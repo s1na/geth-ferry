@@ -86,14 +86,17 @@ func (t *Tracker) report(suffix string) {
 		tag = " — " + suffix
 	}
 	fmt.Fprintf(t.Out, "[%s] %s in %s (%s/s)%s\n",
-		t.Label, humanBytes(n), elapsed.Round(time.Second), humanBytes(int64(rate)), tag)
+		t.Label, HumanBytes(n), elapsed.Round(time.Second), HumanBytes(int64(rate)), tag)
 }
 
 type writerFunc func(p []byte) (int, error)
 
 func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
 
-func humanBytes(n int64) string {
+// HumanBytes renders a byte count in the largest unit at which it is ≥ 1
+// (B, KiB, MiB, GiB, TiB), with two decimal places. Shared with the CLI's
+// `list` and `upload --dry-run` formatters.
+func HumanBytes(n int64) string {
 	const (
 		KiB = 1024
 		MiB = KiB * 1024

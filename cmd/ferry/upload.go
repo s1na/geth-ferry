@@ -15,6 +15,7 @@ import (
 
 	"github.com/s1na/geth-ferry/internal/datadir"
 	"github.com/s1na/geth-ferry/pkg/backend"
+	"github.com/s1na/geth-ferry/pkg/progress"
 	"github.com/s1na/geth-ferry/pkg/snapshot"
 	"github.com/s1na/geth-ferry/pkg/upload"
 )
@@ -24,9 +25,9 @@ func uploadCmd() *cobra.Command {
 		src, dst, name string
 		role           string
 		block, chainID uint64
-		level, threads   int
-		force, quiet     bool
-		dryRun           bool
+		level, threads int
+		force, quiet   bool
+		dryRun         bool
 	)
 	cmd := &cobra.Command{
 		Use:   "upload",
@@ -197,13 +198,13 @@ func printPlan(out io.Writer, src, dst, name, role string, block, chainID uint64
 			fmt.Fprintf(out, "  - %-32s SKIPPED (%s)\n", p.key, p.skipReason)
 			continue
 		}
-		fmt.Fprintf(out, "  - %-32s %12s   %d files\n", p.key, humanBytesU(p.uncompBytes), p.fileCount)
+		fmt.Fprintf(out, "  - %-32s %12s   %d files\n", p.key, progress.HumanBytes(p.uncompBytes), p.fileCount)
 		fmt.Fprintf(out, "      %s\n", p.root)
 		totalFiles += p.fileCount
 		totalBytes += p.uncompBytes
 	}
 	fmt.Fprintf(out, "\n  total uncompressed source: %s across %d files\n",
-		humanBytesU(totalBytes), totalFiles)
+		progress.HumanBytes(totalBytes), totalFiles)
 
 	// Show what the destination keys would look like, without opening the backend.
 	fmt.Fprintf(out, "\ndestination keys (relative to dst):\n")
@@ -245,27 +246,4 @@ func walkSize(root string, skip func(rel string) bool) (count, bytes int64) {
 		return nil
 	})
 	return
-}
-
-// humanBytesU is a colocated copy of the list.go helper. Different file,
-// keep them out of each other's way.
-func humanBytesU(n int64) string {
-	const (
-		KiB = 1024
-		MiB = KiB * 1024
-		GiB = MiB * 1024
-		TiB = GiB * 1024
-	)
-	switch {
-	case n >= TiB:
-		return fmt.Sprintf("%.2f TiB", float64(n)/float64(TiB))
-	case n >= GiB:
-		return fmt.Sprintf("%.2f GiB", float64(n)/float64(GiB))
-	case n >= MiB:
-		return fmt.Sprintf("%.2f MiB", float64(n)/float64(MiB))
-	case n >= KiB:
-		return fmt.Sprintf("%.2f KiB", float64(n)/float64(KiB))
-	default:
-		return fmt.Sprintf("%d B", n)
-	}
 }
