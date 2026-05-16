@@ -97,3 +97,39 @@ func IsLegacyURL(src string) bool {
 	s := strings.ToLower(pathPart)
 	return strings.HasSuffix(s, ".tar.lz4") || strings.HasSuffix(s, ".tar.zst")
 }
+
+// IsURL reports whether s starts with one of the schemes ferry understands
+// as a remote reference: file://, s3://, http://, https://. Used by
+// commands that accept either a local path or a URL.
+func IsURL(s string) bool {
+	for _, scheme := range []string{"file://", "s3://", "http://", "https://"} {
+		if strings.HasPrefix(s, scheme) {
+			return true
+		}
+	}
+	return false
+}
+
+// SplitTrailingSegment splits a URL like
+//
+//	scheme://host/parent/name?query
+//
+// into the root URL ("scheme://host/parent?query") and the trailing name
+// ("name"). Used for snapshot URLs where the last path component is either
+// the snapshot directory or a legacy .tar.{zst,lz4} object.
+func SplitTrailingSegment(s string) (root, name string, err error) {
+	u, err := url.Parse(s)
+	if err != nil {
+		return "", "", err
+	}
+	trimmed := strings.TrimRight(u.Path, "/")
+	if trimmed == "" {
+		return "", "", fmt.Errorf("URL %q has no path", s)
+	}
+	parent, leaf := path.Split(trimmed)
+	if leaf == "" {
+		return "", "", fmt.Errorf("URL %q has no trailing name", s)
+	}
+	u.Path = strings.TrimRight(parent, "/")
+	return u.String(), leaf, nil
+}

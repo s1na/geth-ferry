@@ -4,10 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"path"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -51,7 +49,7 @@ func downloadCmd() *cobra.Command {
 }
 
 func runManifest(ctx context.Context, src, dst string, force bool, progressOut io.Writer) error {
-	rootURL, name, err := splitTrailingSegment(src)
+	rootURL, name, err := snapshot.SplitTrailingSegment(src)
 	if err != nil {
 		return err
 	}
@@ -73,7 +71,7 @@ func runManifest(ctx context.Context, src, dst string, force bool, progressOut i
 }
 
 func runLegacy(ctx context.Context, src, dst string, force bool, progressOut io.Writer) error {
-	rootURL, key, err := splitTrailingSegment(src)
+	rootURL, key, err := snapshot.SplitTrailingSegment(src)
 	if err != nil {
 		return err
 	}
@@ -91,28 +89,4 @@ func runLegacy(ctx context.Context, src, dst string, force bool, progressOut io.
 	}
 	fmt.Printf("downloaded legacy %s\n", key)
 	return nil
-}
-
-// splitTrailingSegment splits a URL like
-//
-//	scheme://host/parent/name
-//
-// into ("scheme://host/parent", "name"). Used for both manifest snapshots
-// (where "name" is the snapshot directory) and legacy single files (where
-// "name" is the .tar.{zst,lz4} object).
-func splitTrailingSegment(s string) (string, string, error) {
-	u, err := url.Parse(s)
-	if err != nil {
-		return "", "", err
-	}
-	trimmed := strings.TrimRight(u.Path, "/")
-	if trimmed == "" {
-		return "", "", fmt.Errorf("URL %q has no path", s)
-	}
-	parent, name := path.Split(trimmed)
-	if name == "" {
-		return "", "", fmt.Errorf("URL %q has no trailing name", s)
-	}
-	u.Path = strings.TrimRight(parent, "/")
-	return u.String(), name, nil
 }

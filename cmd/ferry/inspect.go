@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path"
-	"strings"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 
@@ -38,10 +38,10 @@ func inspectCmd() *cobra.Command {
 // snapshot directory containing one) or a remote URL pointing at a snapshot
 // directory.
 func loadManifest(ctx context.Context, ref string) (*snapshot.Manifest, error) {
-	if !looksLikeURL(ref) {
+	if !snapshot.IsURL(ref) {
 		return loadManifestLocal(ref)
 	}
-	rootURL, name, err := splitTrailingSegment(ref)
+	rootURL, name, err := snapshot.SplitTrailingSegment(ref)
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +64,7 @@ func loadManifestLocal(p string) (*snapshot.Manifest, error) {
 		return nil, err
 	}
 	if info.IsDir() {
-		p = path.Join(p, snapshot.ManifestFilename)
+		p = filepath.Join(p, snapshot.ManifestFilename)
 	}
 	f, err := os.Open(p)
 	if err != nil {
@@ -72,13 +72,4 @@ func loadManifestLocal(p string) (*snapshot.Manifest, error) {
 	}
 	defer f.Close()
 	return snapshot.Decode(f)
-}
-
-func looksLikeURL(s string) bool {
-	for _, scheme := range []string{"file://", "s3://", "http://", "https://"} {
-		if strings.HasPrefix(s, scheme) {
-			return true
-		}
-	}
-	return false
 }

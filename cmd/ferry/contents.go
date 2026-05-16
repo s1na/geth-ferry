@@ -30,7 +30,7 @@ Snapshots produced by older ferry versions (no TOCs) are flagged.`,
 				ctx = context.Background()
 			}
 
-			rootURL, name, err := splitTrailingSegment(src)
+			rootURL, name, err := snapshot.SplitTrailingSegment(src)
 			if err != nil {
 				return err
 			}
@@ -105,4 +105,3 @@ func printTOC(ctx context.Context, be backend.Backend, prefix, name string, p sn
 	}
 	return nil
 }
-

@@ -24,7 +24,7 @@ func verifyCmd() *cobra.Command {
 			if ctx == nil {
 				ctx = context.Background()
 			}
-			rootURL, name, err := splitTrailingSegment(src)
+			rootURL, name, err := snapshot.SplitTrailingSegment(src)
 			if err != nil {
 				return err
 			}
