@@ -90,6 +90,48 @@ func TestRoundTrip(t *testing.T) {
 	)
 }
 
+// TestRoundTripParallel exercises the parallel-parts path in both upload
+// and download. With four-way concurrency on a four-part snapshot, every
+// part runs in its own goroutine; -race coverage proves the pipeline
+// stays correct under that schedule.
+func TestRoundTripParallel(t *testing.T) {
+	tmp := t.TempDir()
+	srcDataDir := filepath.Join(tmp, "src")
+	bucket := filepath.Join(tmp, "bucket")
+	dstDataDir := filepath.Join(tmp, "dst")
+
+	makeFakeDatadir(t, srcDataDir)
+
+	be, err := file.New(bucket)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	name := "geth-1-archive-100-1746014400"
+	if _, err := upload.Run(ctx, be, "", upload.Options{
+		DataDir:       srcDataDir,
+		Name:          name,
+		Role:          snapshot.RoleArchive,
+		Block:         100,
+		ChainID:       1,
+		ParallelParts: 4,
+	}); err != nil {
+		t.Fatalf("parallel upload: %v", err)
+	}
+	if _, err := download.Run(ctx, be, "", download.Options{
+		DataDir:       dstDataDir,
+		Name:          name,
+		ParallelParts: 4,
+	}); err != nil {
+		t.Fatalf("parallel download: %v", err)
+	}
+	assertTreesEqual(t,
+		filepath.Join(srcDataDir, "geth"),
+		filepath.Join(dstDataDir, "geth"),
+	)
+}
+
 // TestRoundTripHBSS confirms an HBSS-style node (no triedb/, no ancient/state/)
 // produces exactly two parts (live + ancient-chain) and round-trips cleanly.
 func TestRoundTripHBSS(t *testing.T) {

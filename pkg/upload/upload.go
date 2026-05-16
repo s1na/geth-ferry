@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/s1na/geth-ferry/pkg/backend"
@@ -59,6 +60,12 @@ type Options struct {
 	// callback. Used by the CLI to emit periodic "[label] X bytes, Y/s"
 	// lines on stderr. Tests typically leave this nil.
 	Progress io.Writer
+
+	// ParallelParts controls how many snapshot parts upload concurrently.
+	// Values ≤ 1 keep the historical sequential behavior. Each in-flight
+	// part owns its own multipart-upload buffer set; peak memory scales
+	// linearly. Tune carefully on memory-constrained hosts.
+	ParallelParts int
 }
 
 // Run executes the upload to dst at prefix. prefix is the in-backend key
@@ -102,85 +109,15 @@ func Run(ctx context.Context, dst backend.Backend, prefix string, opts Options) 
 		return nil, err
 	}
 
-	// Live pebble: tar the chaindata/ tree but skip the ancient/ subtree —
-	// it goes into its own parts below.
-	livePart, err := uploadPart(ctx, dst, partRequest{
-		Prefix:   prefix,
-		Name:     opts.Name,
-		PartPath: snapshot.ChaindataLivePart,
-		Kind:     snapshot.PartChaindataLive,
-		SrcRoot:  gethDir,
-		SrcSub:   "chaindata",
-		Skip: func(rel string) bool {
-			return rel == "chaindata/ancient" || strings.HasPrefix(rel, "chaindata/ancient/")
-		},
-		Level:    opts.Level,
-		Threads:  opts.Threads,
-		Progress: opts.Progress,
-	})
+	planned, err := planParts(gethDir, prefix, opts)
 	if err != nil {
-		return nil, fmt.Errorf("upload chaindata-live: %w", err)
+		return nil, err
 	}
-	manifest.Parts = append(manifest.Parts, livePart)
-
-	// Ancient chain freezer: always present.
-	chainPart, err := uploadPart(ctx, dst, partRequest{
-		Prefix:   prefix,
-		Name:     opts.Name,
-		PartPath: snapshot.AncientChainPart,
-		Kind:     snapshot.PartAncientChain,
-		SrcRoot:  gethDir,
-		SrcSub:   "chaindata/ancient/chain",
-		Level:    opts.Level,
-		Threads:  opts.Threads,
-		Progress: opts.Progress,
-	})
+	parts, err := uploadParts(ctx, dst, planned, opts.ParallelParts)
 	if err != nil {
-		return nil, fmt.Errorf("upload ancient-chain: %w", err)
+		return nil, err
 	}
-	manifest.Parts = append(manifest.Parts, chainPart)
-
-	// Ancient state freezer: present on PBSS nodes (full or archive).
-	if _, err := os.Stat(filepath.Join(gethDir, "chaindata", "ancient", "state")); err == nil {
-		statePart, err := uploadPart(ctx, dst, partRequest{
-			Prefix:   prefix,
-			Name:     opts.Name,
-			PartPath: snapshot.AncientStatePart,
-			Kind:     snapshot.PartAncientState,
-			SrcRoot:  gethDir,
-			SrcSub:   "chaindata/ancient/state",
-			Level:    opts.Level,
-			Threads:  opts.Threads,
-			Progress: opts.Progress,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("upload ancient-state: %w", err)
-		}
-		manifest.Parts = append(manifest.Parts, statePart)
-	} else if !os.IsNotExist(err) {
-		return nil, fmt.Errorf("stat ancient/state: %w", err)
-	}
-
-	// Triedb: present only on PBSS nodes.
-	if _, err := os.Stat(filepath.Join(gethDir, "triedb")); err == nil {
-		triedbPart, err := uploadPart(ctx, dst, partRequest{
-			Prefix:   prefix,
-			Name:     opts.Name,
-			PartPath: snapshot.TriedbPart,
-			Kind:     snapshot.PartTriedb,
-			SrcRoot:  gethDir,
-			SrcSub:   "triedb",
-			Level:    opts.Level,
-			Threads:  opts.Threads,
-			Progress: opts.Progress,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("upload triedb: %w", err)
-		}
-		manifest.Parts = append(manifest.Parts, triedbPart)
-	} else if !os.IsNotExist(err) {
-		return nil, fmt.Errorf("stat triedb: %w", err)
-	}
+	manifest.Parts = parts
 
 	if err := manifest.Validate(); err != nil {
 		return nil, fmt.Errorf("manifest invalid: %w", err)
@@ -285,10 +222,186 @@ type partRequest struct {
 	// Skip, when non-nil, returns true for relative slash paths (relative to
 	// SrcRoot) that should be excluded. Returning true on a directory skips
 	// its entire subtree.
-	Skip     func(rel string) bool
+	Skip func(rel string) bool
+
+	// UncompressedTotal is the expected sum of regular-file sizes under
+	// SrcRoot/SrcSub (minus Skip), pre-walked at planning time. Used to
+	// give the progress tracker a denominator for ETAs. Zero means
+	// "unknown"; the part still uploads, just without ETA output.
+	UncompressedTotal int64
+
 	Level    int
 	Threads  int
 	Progress io.Writer
+}
+
+// plannedPart is a partRequest plus the kind, kept paired so error
+// messages can name the part regardless of dispatch order.
+type plannedPart struct {
+	kind snapshot.PartKind
+	req  partRequest
+}
+
+// planParts builds the list of part requests for a snapshot. It skips
+// optional parts whose source directories don't exist (HBSS nodes have no
+// triedb/, no ancient/state/). Returned slice is in the canonical part
+// order: live, ancient-chain, ancient-state, triedb.
+func planParts(gethDir, prefix string, opts Options) ([]plannedPart, error) {
+	common := partRequest{
+		Prefix:   prefix,
+		Name:     opts.Name,
+		SrcRoot:  gethDir,
+		Level:    opts.Level,
+		Threads:  opts.Threads,
+		Progress: opts.Progress,
+	}
+
+	planned := []plannedPart{
+		{
+			kind: snapshot.PartChaindataLive,
+			req: withPart(common, snapshot.ChaindataLivePart, snapshot.PartChaindataLive,
+				"chaindata", func(rel string) bool {
+					return rel == "chaindata/ancient" || strings.HasPrefix(rel, "chaindata/ancient/")
+				}),
+		},
+		{
+			kind: snapshot.PartAncientChain,
+			req:  withPart(common, snapshot.AncientChainPart, snapshot.PartAncientChain, "chaindata/ancient/chain", nil),
+		},
+	}
+
+	// Optional parts: include only if the source directory exists.
+	for _, opt := range []struct {
+		kind snapshot.PartKind
+		path string
+		sub  string
+		dir  string
+	}{
+		{snapshot.PartAncientState, snapshot.AncientStatePart, "chaindata/ancient/state", filepath.Join(gethDir, "chaindata", "ancient", "state")},
+		{snapshot.PartTriedb, snapshot.TriedbPart, "triedb", filepath.Join(gethDir, "triedb")},
+	} {
+		if _, err := os.Stat(opt.dir); err == nil {
+			planned = append(planned, plannedPart{
+				kind: opt.kind,
+				req:  withPart(common, opt.path, opt.kind, opt.sub, nil),
+			})
+		} else if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("stat %s: %w", opt.dir, err)
+		}
+	}
+
+	// Pre-walk each part's source tree to seed UncompressedTotal. This
+	// metadata-only pass is cheap relative to the streaming tar (seconds
+	// vs. hours on a multi-TB datadir) and gives the progress tracker
+	// the denominator it needs for ETAs.
+	for i := range planned {
+		_, total := walkSize(filepath.Join(gethDir, planned[i].req.SrcSub), planned[i].req.Skip)
+		planned[i].req.UncompressedTotal = total
+	}
+	return planned, nil
+}
+
+// walkSize sums regular-file count and bytes under root. skip, when
+// non-nil, returns true for slash-relative paths (relative to root) that
+// should be excluded; returning true on a directory skips the subtree.
+// Tolerates transient permission/IO errors during the walk by skipping
+// the offending entry — appropriate for a best-effort planning pass.
+//
+// The skip predicate here uses paths relative to root, NOT to SrcRoot.
+// That's the same shape tarTree expects, so chaindata-live's
+// skip("chaindata/ancient/...") matches by inserting the SrcSub prefix.
+func walkSize(root string, skip func(rel string) bool) (count, bytes int64) {
+	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		// Tar entry names are relative to SrcRoot (one level above root),
+		// so reconstruct that shape for the skip predicate.
+		rel, _ := filepath.Rel(filepath.Dir(root), p)
+		if skip != nil && skip(filepath.ToSlash(rel)) {
+			if d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		count++
+		bytes += info.Size()
+		return nil
+	})
+	return
+}
+
+// withPart returns a copy of common with the part-specific fields filled.
+func withPart(common partRequest, partPath string, kind snapshot.PartKind, sub string, skip func(string) bool) partRequest {
+	req := common
+	req.PartPath = partPath
+	req.Kind = kind
+	req.SrcSub = sub
+	req.Skip = skip
+	return req
+}
+
+// uploadParts dispatches the planned parts through a worker pool of size
+// parallelN (clamped to 1..len(planned)). Results land in the returned
+// slice in canonical (planned) order regardless of completion order.
+// First error cancels in-flight workers; remaining parts unwind cleanly
+// via the existing Abort path on context cancellation.
+func uploadParts(ctx context.Context, dst backend.Backend, planned []plannedPart, parallelN int) ([]snapshot.Part, error) {
+	if parallelN < 1 {
+		parallelN = 1
+	}
+	if parallelN > len(planned) {
+		parallelN = len(planned)
+	}
+
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	results := make([]snapshot.Part, len(planned))
+	var (
+		firstErr error
+		errMu    sync.Mutex
+	)
+	recordErr := func(err error) {
+		errMu.Lock()
+		if firstErr == nil {
+			firstErr = err
+			cancel()
+		}
+		errMu.Unlock()
+	}
+
+	sem := make(chan struct{}, parallelN)
+	var wg sync.WaitGroup
+	for i, pp := range planned {
+		if runCtx.Err() != nil {
+			break
+		}
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(i int, pp plannedPart) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			p, err := uploadPart(runCtx, dst, pp.req)
+			if err != nil {
+				recordErr(fmt.Errorf("upload %s: %w", pp.kind, err))
+				return
+			}
+			results[i] = p
+		}(i, pp)
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	return results, nil
 }
 
 func uploadPart(ctx context.Context, be backend.Backend, req partRequest) (snapshot.Part, error) {
@@ -310,21 +423,31 @@ func uploadPart(ctx context.Context, be backend.Backend, req partRequest) (snaps
 	}()
 
 	hasher := sha256.New()
-	writers := []io.Writer{bw, hasher}
-	var tracker *progress.Tracker
-	if req.Progress != nil {
-		tracker = (&progress.Tracker{Label: string(req.Kind), Out: req.Progress}).Start()
-		defer tracker.Stop()
-		writers = append(writers, tracker.Writer())
-	}
-	compressedCounter := &countWriter{w: io.MultiWriter(writers...)}
+	compressedCounter := &countWriter{w: io.MultiWriter(bw, hasher)}
 
 	zstdEnc, err := codec.NewZstdEncoder(compressedCounter, req.Level, req.Threads)
 	if err != nil {
 		return snapshot.Part{}, err
 	}
 	uncompressedCounter := &countWriter{w: zstdEnc}
-	tw := tar.NewWriter(uncompressedCounter)
+
+	// Progress tracking sits ABOVE zstd so the bytes/sec figure reflects
+	// source throughput (matches the UncompressedTotal denominator and is
+	// what an operator wants to extrapolate — "how long until this 2 TB
+	// part is done"). The tracker hands back an io.Writer that simply
+	// counts; it doesn't consume bytes from the pipeline.
+	var trackerWriter io.Writer = io.Discard
+	var tracker *progress.Tracker
+	if req.Progress != nil {
+		tracker = (&progress.Tracker{
+			Label: string(req.Kind),
+			Out:   req.Progress,
+			Total: req.UncompressedTotal,
+		}).Start()
+		defer tracker.Stop()
+		trackerWriter = tracker.Writer()
+	}
+	tw := tar.NewWriter(io.MultiWriter(uncompressedCounter, trackerWriter))
 
 	var entries []tocEntry
 	onFile := func(name string, size int64) {

@@ -11,6 +11,7 @@ import (
 	"io"
 	"path"
 	"path/filepath"
+	"sync"
 
 	"github.com/s1na/geth-ferry/pkg/backend"
 	"github.com/s1na/geth-ferry/pkg/codec"
@@ -33,6 +34,13 @@ type Options struct {
 	// Progress, when non-nil, is the destination for periodic progress
 	// lines (typically os.Stderr). Tests usually leave nil.
 	Progress io.Writer
+
+	// ParallelParts controls how many manifest parts download concurrently.
+	// Values ≤ 1 keep the historical sequential behavior. Parts have
+	// disjoint extraction targets (live in chaindata/ minus ancient/,
+	// ancient-chain in chaindata/ancient/chain/, etc.), so concurrent
+	// extraction is safe.
+	ParallelParts int
 }
 
 // Run downloads and extracts the snapshot at prefix/name from src.
@@ -68,16 +76,61 @@ func Run(ctx context.Context, src backend.Backend, prefix string, opts Options) 
 		return nil, err
 	}
 
-	for _, p := range manifest.Parts {
-		if err := downloadPart(ctx, src, prefix, opts.Name, p, target.Path, opts.Progress); err != nil {
-			return nil, fmt.Errorf("part %s: %w", p.Name, err)
-		}
+	if err := downloadParts(ctx, src, prefix, opts.Name, manifest.Parts, target.Path, opts.Progress, opts.ParallelParts); err != nil {
+		return nil, err
 	}
 	if err := target.Commit(); err != nil {
 		return nil, err
 	}
 	committed = true
 	return manifest, nil
+}
+
+// downloadParts dispatches part fetch+verify+extract through a worker
+// pool of size parallelN (clamped to 1..len(parts)). First error cancels
+// the run; the caller's Abort on the atomic target wipes the scratch.
+func downloadParts(ctx context.Context, src backend.Backend, prefix, name string, parts []snapshot.Part, gethDir string, progressOut io.Writer, parallelN int) error {
+	if parallelN < 1 {
+		parallelN = 1
+	}
+	if parallelN > len(parts) {
+		parallelN = len(parts)
+	}
+
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var (
+		firstErr error
+		errMu    sync.Mutex
+	)
+	recordErr := func(err error) {
+		errMu.Lock()
+		if firstErr == nil {
+			firstErr = err
+			cancel()
+		}
+		errMu.Unlock()
+	}
+
+	sem := make(chan struct{}, parallelN)
+	var wg sync.WaitGroup
+	for _, p := range parts {
+		if runCtx.Err() != nil {
+			break
+		}
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(p snapshot.Part) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if err := downloadPart(runCtx, src, prefix, name, p, gethDir, progressOut); err != nil {
+				recordErr(fmt.Errorf("part %s: %w", p.Name, err))
+			}
+		}(p)
+	}
+	wg.Wait()
+	return firstErr
 }
 
 func fetchManifest(ctx context.Context, src backend.Backend, prefix, name string) (*snapshot.Manifest, error) {
@@ -98,15 +151,11 @@ func downloadPart(ctx context.Context, src backend.Backend, prefix, name string,
 	}
 	defer r.Close()
 
+	// sha256 sees compressed bytes from the wire; tracker sees uncompressed
+	// bytes leaving zstd. Two separate tees so the ETA denominator
+	// (manifest.UncompressedSize) compares apples to apples.
 	hasher := sha256.New()
-	var tracker *progress.Tracker
-	var src2 io.Reader = r
-	if progressOut != nil {
-		tracker = (&progress.Tracker{Label: string(p.Kind), Out: progressOut}).Start()
-		defer tracker.Stop()
-		src2 = io.TeeReader(r, tracker.Writer())
-	}
-	teed := io.TeeReader(src2, hasher)
+	teed := io.TeeReader(r, hasher)
 
 	zr, err := codec.NewZstdDecoder(teed)
 	if err != nil {
@@ -114,7 +163,19 @@ func downloadPart(ctx context.Context, src backend.Backend, prefix, name string,
 	}
 	defer zr.Close()
 
-	if err := snapshot.Untar(zr, gethDir); err != nil {
+	var extractIn io.Reader = zr
+	var tracker *progress.Tracker
+	if progressOut != nil {
+		tracker = (&progress.Tracker{
+			Label: string(p.Kind),
+			Out:   progressOut,
+			Total: p.UncompressedSize,
+		}).Start()
+		defer tracker.Stop()
+		extractIn = io.TeeReader(zr, tracker.Writer())
+	}
+
+	if err := snapshot.Untar(extractIn, gethDir); err != nil {
 		return err
 	}
 	// Drain any trailing zstd bytes (typically zero) so the sha256 covers
