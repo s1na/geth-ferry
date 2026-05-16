@@ -8,7 +8,7 @@ import (
 )
 
 func init() {
-	backend.Register("s3", func(u *url.URL) (backend.Backend, string, error) {
-		return FromURL(context.Background(), u)
+	backend.Register("s3", func(u *url.URL, cfg *backend.OpenConfig) (backend.Backend, string, error) {
+		return FromURL(context.Background(), u, cfg)
 	})
 }

@@ -68,7 +68,7 @@ func TestFromURLValidation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, _, err = FromURL(context.Background(), u)
+			_, _, err = FromURL(context.Background(), u, nil)
 			if (err == nil) != c.wantOK {
 				t.Fatalf("FromURL err = %v, wantOK = %v", err, c.wantOK)
 			}
@@ -97,7 +97,7 @@ func TestRoundTripIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	be, _, err := FromURL(context.Background(), u)
+	be, _, err := FromURL(context.Background(), u, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

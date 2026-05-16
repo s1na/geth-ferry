@@ -36,17 +36,33 @@ import (
 	"github.com/s1na/geth-ferry/pkg/backend"
 )
 
-// MultipartPartSize is the default size of each multipart upload part. With
-// the S3 limit of 10 000 parts, 256 MiB caps a single object at ~2.5 TiB —
-// enough for the chaindata tarball with headroom. The user can lower this
-// via the SDK options for tests.
-const MultipartPartSize = 256 * 1024 * 1024
+// DefaultMultipartPartSize is the per-part size used when the caller
+// doesn't tune it. With the S3 limit of 10 000 parts, 256 MiB caps a
+// single object at ~2.5 TiB — enough for the chaindata tarball with
+// headroom.
+const DefaultMultipartPartSize = 256 * 1024 * 1024
+
+// DefaultMultipartConcurrency is the number of UploadPart requests in
+// flight per Put when the caller doesn't tune it. Each in-flight part
+// owns one part-size buffer, so peak memory per Put is roughly
+// concurrency × part-size (~1.25 GiB at the defaults). The buffers are
+// recycled via a sync.Pool so steady-state allocation is concurrency
+// × part-size, not unbounded.
+const DefaultMultipartConcurrency = 5
 
 // Backend is an S3-compatible Backend rooted at a bucket + key prefix.
 type Backend struct {
 	client *s3.Client
 	bucket string
 	prefix string // canonicalized: no leading slash, trailing slash if non-empty
+
+	partSize    int
+	concurrency int
+
+	// partPool recycles partSize-cap byte slices across UploadParts. The
+	// pool is keyed implicitly by partSize because partSize is set at
+	// construction and never changes for the life of the Backend.
+	partPool sync.Pool
 }
 
 // New constructs an S3 backend against an explicit bucket + prefix +
@@ -57,18 +73,39 @@ func New(ctx context.Context, bucket, prefix string, opts ClientOptions) (*Backe
 		return nil, fmt.Errorf("load aws config: %w", err)
 	}
 	client := s3.NewFromConfig(cfg, opts.serviceOptions()...)
-	return &Backend{
-		client: client,
-		bucket: bucket,
-		prefix: canonPrefix(prefix),
-	}, nil
+	partSize := opts.MultipartPartSize
+	if partSize <= 0 {
+		partSize = DefaultMultipartPartSize
+	}
+	concurrency := opts.MultipartConcurrency
+	if concurrency <= 0 {
+		concurrency = DefaultMultipartConcurrency
+	}
+	be := &Backend{
+		client:      client,
+		bucket:      bucket,
+		prefix:      canonPrefix(prefix),
+		partSize:    partSize,
+		concurrency: concurrency,
+	}
+	be.partPool.New = func() any {
+		b := make([]byte, 0, partSize)
+		return &b
+	}
+	return be, nil
 }
 
-// ClientOptions holds the non-secret S3 connection knobs derived from the URL.
+// ClientOptions holds the non-secret S3 connection knobs derived from the
+// URL plus any tunables threaded through backend.OpenConfig.
 type ClientOptions struct {
 	Endpoint  string
 	Region    string
 	PathStyle bool
+
+	// MultipartPartSize and MultipartConcurrency override the package
+	// defaults; zero means "use the default".
+	MultipartPartSize    int
+	MultipartConcurrency int
 }
 
 func (o ClientOptions) configOptions() []func(*config.LoadOptions) error {
@@ -106,8 +143,9 @@ func (o ClientOptions) serviceOptions() []func(*s3.Options) {
 // FromURL parses an s3:// URL into a configured Backend. It returns the
 // Backend along with the in-backend prefix that the registry should hand
 // callers — for S3 this is empty because the prefix is already baked into
-// the Backend struct.
-func FromURL(ctx context.Context, u *url.URL) (*Backend, string, error) {
+// the Backend struct. tune carries optional non-URL tunables (multipart
+// part size / concurrency); pass nil to use defaults.
+func FromURL(ctx context.Context, u *url.URL, tune *backend.OpenConfig) (*Backend, string, error) {
 	if u.Scheme != "s3" {
 		return nil, "", fmt.Errorf("s3 backend: scheme %q unsupported", u.Scheme)
 	}
@@ -126,11 +164,16 @@ func FromURL(ctx context.Context, u *url.URL) (*Backend, string, error) {
 			return nil, "", fmt.Errorf("s3 backend: invalid path_style %q", v)
 		}
 	}
-	be, err := New(ctx, u.Host, u.Path, ClientOptions{
+	co := ClientOptions{
 		Endpoint:  q.Get("endpoint"),
 		Region:    q.Get("region"),
 		PathStyle: pathStyle,
-	})
+	}
+	if tune != nil {
+		co.MultipartPartSize = tune.MultipartPartSize
+		co.MultipartConcurrency = tune.MultipartConcurrency
+	}
+	be, err := New(ctx, u.Host, u.Path, co)
 	if err != nil {
 		return nil, "", err
 	}
@@ -239,13 +282,6 @@ func (b *Backend) Get(ctx context.Context, key string) (io.ReadCloser, error) {
 	return out.Body, nil
 }
 
-// MultipartConcurrency is the number of UploadPart requests in flight at
-// once during a single Put. Each in-flight part owns one MultipartPartSize
-// buffer, so peak memory per Put is roughly MultipartConcurrency ×
-// MultipartPartSize (~1.25 GiB at the defaults). Tune both down on
-// memory-constrained hosts.
-const MultipartConcurrency = 5
-
 // Put returns a streaming writer backed by an S3 multipart upload that we
 // drive ourselves (no manager.Uploader). Each part is sent as a fixed-size
 // byte buffer with an explicit ContentLength and an inline Crc32 header;
@@ -270,11 +306,19 @@ func (b *Backend) Put(ctx context.Context, key string) (backend.Writer, error) {
 		bucket:   b.bucket,
 		key:      full,
 		uploadID: aws.ToString(out.UploadId),
-		partSize: MultipartPartSize,
-		buf:      make([]byte, 0, MultipartPartSize),
+		partSize: b.partSize,
+		buf:      b.acquireBuf(),
 		partNum:  1,
-		sem:      make(chan struct{}, MultipartConcurrency),
+		sem:      make(chan struct{}, b.concurrency),
+		pool:     &b.partPool,
 	}, nil
+}
+
+// acquireBuf takes a part-sized buffer from the backend's pool, resetting
+// its length to zero. Companion to multipartWriter.releaseBuf.
+func (b *Backend) acquireBuf() []byte {
+	bp := b.partPool.Get().(*[]byte)
+	return (*bp)[:0]
 }
 
 func (b *Backend) Delete(ctx context.Context, key string) error {
@@ -306,7 +350,11 @@ func isNotFound(err error) bool {
 
 // multipartWriter implements backend.Writer by buffering up to partSize
 // bytes and dispatching each filled buffer as an UploadPart in a worker
-// goroutine. Up to MultipartConcurrency parts are in flight at once.
+// goroutine. Up to concurrency parts are in flight at once. Part buffers
+// are checked out from the parent Backend's sync.Pool on dispatch and
+// returned when the corresponding UploadPart completes — steady-state
+// allocation is therefore concurrency × partSize regardless of how many
+// parts the object turns into.
 //
 // Termination is via either Close (commit — CompleteMultipartUpload) or
 // Abort (discard — AbortMultipartUpload, using a fresh context so it
@@ -320,6 +368,7 @@ type multipartWriter struct {
 	key      string
 	uploadID string
 	partSize int
+	pool     *sync.Pool
 
 	buf     []byte
 	partNum int32
@@ -372,7 +421,7 @@ func (w *multipartWriter) recordErr(err error) {
 }
 
 // dispatchBuffered starts an UploadPart for the current buffer and rotates
-// in a fresh one. Bounded by sem.
+// in a fresh one from the pool. Bounded by sem.
 func (w *multipartWriter) dispatchBuffered() error {
 	if len(w.buf) == 0 {
 		return nil
@@ -382,7 +431,7 @@ func (w *multipartWriter) dispatchBuffered() error {
 	}
 
 	body := w.buf
-	w.buf = make([]byte, 0, w.partSize)
+	w.buf = w.acquireBuf()
 	pn := w.partNum
 	w.partNum++
 
@@ -392,8 +441,28 @@ func (w *multipartWriter) dispatchBuffered() error {
 		defer w.wg.Done()
 		defer func() { <-w.sem }()
 		w.uploadOnePart(pn, body)
+		// Return the buffer to the pool once we're done with the body
+		// (the bytes.NewReader inside UploadPart has held a reference).
+		w.releaseBuf(body)
 	}()
 	return nil
+}
+
+// acquireBuf takes a zero-length, part-sized slice from the backend's
+// pool. releaseBuf returns one for reuse.
+func (w *multipartWriter) acquireBuf() []byte {
+	if w.pool == nil {
+		return make([]byte, 0, w.partSize)
+	}
+	bp := w.pool.Get().(*[]byte)
+	return (*bp)[:0]
+}
+
+func (w *multipartWriter) releaseBuf(buf []byte) {
+	if w.pool == nil || cap(buf) != w.partSize {
+		return
+	}
+	w.pool.Put(&buf)
 }
 
 func (w *multipartWriter) uploadOnePart(pn int32, body []byte) {

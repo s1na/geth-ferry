@@ -7,7 +7,7 @@ import (
 )
 
 func init() {
-	backend.Register("file", func(u *url.URL) (backend.Backend, string, error) {
+	backend.Register("file", func(u *url.URL, _ *backend.OpenConfig) (backend.Backend, string, error) {
 		be, err := FromURL(u)
 		if err != nil {
 			return nil, "", err
