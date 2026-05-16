@@ -99,7 +99,10 @@ func (t *Tracker) report(suffix string) {
 			pct = 100
 		}
 		eta := "—"
-		if rate > 0 && n < t.Total {
+		switch {
+		case n >= t.Total:
+			eta = "0s"
+		case rate > 0:
 			// Compute as float seconds, then to Duration in one cast so the
 			// nanosecond-scale conversion uses the full float magnitude
 			// instead of overflowing through int64(seconds) × time.Second.
