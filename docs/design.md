@@ -190,7 +190,7 @@ both native AWS S3 and the S3-compatible providers we care about.
 Non-secret config goes on the URL query string:
 
 ```
-s3://bucket/snapshots/?endpoint=s3.de.io.cloud.ovh.net&region=de
+s3://my-bucket/snapshots/?endpoint=s3.example.com&region=us-east-1
 ```
 
 Credentials come from the standard AWS chain (env vars,

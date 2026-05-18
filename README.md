@@ -58,8 +58,8 @@ Stop geth first (the runbook expects `<datadir>/geth/LOCK` and
 AWS_ACCESS_KEY_ID=...
 AWS_SECRET_ACCESS_KEY=...
 ferry upload \
-  --src /datadrive/geth \
-  --dst 's3://geth-s3-storage/snapshots/?endpoint=s3.de.io.cloud.ovh.net&region=de' \
+  --src /var/lib/geth \
+  --dst 's3://my-bucket/snapshots/?endpoint=s3.example.com&region=us-east-1' \
   --role archive
 ```
 
@@ -113,8 +113,8 @@ established the total) an ETA:
 
 ```
 ferry download \
-  --src 's3://geth-s3-storage/snapshots/geth-1-archive-23456789-1746014400?endpoint=s3.de.io.cloud.ovh.net&region=de' \
-  --dst /datadrive/geth
+  --src 's3://my-bucket/snapshots/geth-1-archive-23456789-1746014400?endpoint=s3.example.com&region=us-east-1' \
+  --dst /var/lib/geth
 ```
 
 Each part is sha256-verified against the manifest as it streams.
@@ -124,8 +124,8 @@ ends in `.tar.lz4` or `.tar.zst`:
 
 ```
 ferry download \
-  --src 's3://geth-s3-storage/archives/chaindata-23456789.tar.lz4?endpoint=s3.de.io.cloud.ovh.net&region=de' \
-  --dst /datadrive/geth
+  --src 's3://my-bucket/archives/chaindata-23456789.tar.lz4?endpoint=s3.example.com&region=us-east-1' \
+  --dst /var/lib/geth
 ```
 
 Legacy snapshots have no manifest and no sha256; we trust the bytes the
@@ -227,7 +227,7 @@ compatibility issues.
 Example for OVH:
 
 ```
-s3://geth-s3-storage/snapshots/?endpoint=s3.de.io.cloud.ovh.net&region=de
+s3://my-bucket/snapshots/?endpoint=s3.de.io.cloud.ovh.net&region=de
 ```
 
 For native AWS S3, disable path-style addressing:
@@ -253,7 +253,7 @@ go test ./...
 To exercise the S3 backend against a real bucket, set `FERRY_S3_TEST_URL`:
 
 ```
-export FERRY_S3_TEST_URL='s3://my-bucket/ferry-test/?endpoint=s3.de.io.cloud.ovh.net&region=de'
+export FERRY_S3_TEST_URL='s3://my-bucket/ferry-test/?endpoint=s3.example.com&region=us-east-1'
 export AWS_ACCESS_KEY_ID=...
 export AWS_SECRET_ACCESS_KEY=...
 go test ./pkg/backend/s3/ -run TestRoundTripIntegration -v
