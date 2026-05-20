@@ -6,12 +6,14 @@ import (
 	"io"
 	"os"
 	"path"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/s1na/geth-ferry/pkg/backend"
 	"github.com/s1na/geth-ferry/pkg/download"
 	"github.com/s1na/geth-ferry/pkg/legacy"
+	"github.com/s1na/geth-ferry/pkg/progress"
 	"github.com/s1na/geth-ferry/pkg/snapshot"
 )
 
@@ -56,7 +58,7 @@ func runManifest(ctx context.Context, src, dst string, force bool, progressOut i
 	if err != nil {
 		return err
 	}
-	m, err := download.Run(ctx, be, prefix, download.Options{
+	m, st, err := download.Run(ctx, be, prefix, download.Options{
 		DataDir:       dst,
 		Name:          name,
 		Force:         force,
@@ -66,8 +68,41 @@ func runManifest(ctx context.Context, src, dst string, force bool, progressOut i
 	if err != nil {
 		return err
 	}
-	fmt.Printf("downloaded %s — %d part(s)\n", m.Name, len(m.Parts))
+	printDownloadSummary(os.Stdout, m, st)
 	return nil
+}
+
+// printDownloadSummary mirrors printUploadSummary for the download side.
+// "Downloaded bytes" is the compressed wire size; uncompressed is the
+// post-extract footprint, which an operator wants to see to know how
+// much disk they just spent.
+func printDownloadSummary(out io.Writer, m *snapshot.Manifest, st *download.Stats) {
+	var totalCompressed, totalUncompressed int64
+	for _, p := range m.Parts {
+		totalCompressed += p.CompressedSize
+		totalUncompressed += p.UncompressedSize
+	}
+	fmt.Fprintf(out, "downloaded %s — %d part(s), %s → %s in %s (%s)\n",
+		m.Name, len(m.Parts),
+		progress.HumanBytes(totalCompressed),
+		progress.HumanBytes(totalUncompressed),
+		fmtDuration(st.Elapsed),
+		fmtRate(totalUncompressed, st.Elapsed),
+	)
+	elapsedByName := map[string]time.Duration{}
+	for _, ps := range st.Parts {
+		elapsedByName[ps.Name] = ps.Elapsed
+	}
+	for _, p := range m.Parts {
+		e := elapsedByName[p.Name]
+		fmt.Fprintf(out, "  %s  %s → %s  in %s (%s)\n",
+			p.Name,
+			progress.HumanBytes(p.CompressedSize),
+			progress.HumanBytes(p.UncompressedSize),
+			fmtDuration(e),
+			fmtRate(p.UncompressedSize, e),
+		)
+	}
 }
 
 func runLegacy(ctx context.Context, src, dst string, force bool, progressOut io.Writer) error {

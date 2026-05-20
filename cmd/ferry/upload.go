@@ -74,7 +74,7 @@ func uploadCmd() *cobra.Command {
 			if quiet {
 				progressOut = nil
 			}
-			m, err := upload.Run(ctx, be, prefix, upload.Options{
+			m, st, err := upload.Run(ctx, be, prefix, upload.Options{
 				DataDir:       src,
 				Name:          name,
 				Role:          snapshot.Role(role),
@@ -90,11 +90,7 @@ func uploadCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Printf("uploaded %s — %d part(s)\n", m.Name, len(m.Parts))
-			for _, p := range m.Parts {
-				fmt.Printf("  %s  %d → %d bytes  sha256=%s\n",
-					p.Name, p.UncompressedSize, p.CompressedSize, p.SHA256)
-			}
+			printUploadSummary(cmd.OutOrStdout(), m, st)
 			return nil
 		},
 	}
@@ -116,6 +112,60 @@ func uploadCmd() *cobra.Command {
 		_ = cmd.MarkFlagRequired(name)
 	}
 	return cmd
+}
+
+// printUploadSummary writes the post-upload roll-up: total elapsed and
+// throughput, then one line per part with its own elapsed/rate alongside
+// bytes and sha256. Per-part rate uses the part's own wall-clock, so
+// parallel parts each report their actual throughput rather than the
+// outer-elapsed-shared denominator.
+func printUploadSummary(out io.Writer, m *snapshot.Manifest, st *upload.Stats) {
+	var totalUncompressed, totalCompressed int64
+	for _, p := range m.Parts {
+		totalUncompressed += p.UncompressedSize
+		totalCompressed += p.CompressedSize
+	}
+	fmt.Fprintf(out, "uploaded %s — %d part(s), %s → %s in %s (%s)\n",
+		m.Name, len(m.Parts),
+		progress.HumanBytes(totalUncompressed),
+		progress.HumanBytes(totalCompressed),
+		fmtDuration(st.Elapsed),
+		fmtRate(totalUncompressed, st.Elapsed),
+	)
+	elapsedByName := map[string]time.Duration{}
+	for _, ps := range st.Parts {
+		elapsedByName[ps.Name] = ps.Elapsed
+	}
+	for _, p := range m.Parts {
+		e := elapsedByName[p.Name]
+		fmt.Fprintf(out, "  %s  %s → %s  in %s (%s)  sha256=%s\n",
+			p.Name,
+			progress.HumanBytes(p.UncompressedSize),
+			progress.HumanBytes(p.CompressedSize),
+			fmtDuration(e),
+			fmtRate(p.UncompressedSize, e),
+			p.SHA256,
+		)
+	}
+}
+
+// fmtDuration formats a duration with second precision and an em-dash
+// fallback for the zero value (which shouldn't happen in practice but
+// guards against degenerate inputs).
+func fmtDuration(d time.Duration) string {
+	if d <= 0 {
+		return "—"
+	}
+	return d.Round(time.Second).String()
+}
+
+// fmtRate renders bytes-per-second over a duration as "X/s". Returns
+// "—/s" for zero or negative duration.
+func fmtRate(bytes int64, d time.Duration) string {
+	if d <= 0 {
+		return "—/s"
+	}
+	return progress.HumanBytes(int64(float64(bytes)/d.Seconds())) + "/s"
 }
 
 // printPlan walks the source tree and prints, per planned part, the file
