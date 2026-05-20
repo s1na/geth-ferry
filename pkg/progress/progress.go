@@ -56,6 +56,13 @@ func (t *Tracker) Stop() {
 	t.report("done")
 }
 
+// Stats returns the byte count observed so far and the wall-clock since
+// Start. Safe to call after Stop; useful for callers that want to emit
+// their own roll-up summary without recomputing the math.
+func (t *Tracker) Stats() (bytes int64, elapsed time.Duration) {
+	return t.n.Load(), time.Since(t.started)
+}
+
 // Writer returns an io.Writer that adds every successful write byte count
 // to this tracker. Compose via io.MultiWriter to attach to an existing
 // pipeline without consuming bytes.
