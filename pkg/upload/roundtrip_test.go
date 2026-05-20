@@ -34,7 +34,7 @@ func TestRoundTrip(t *testing.T) {
 
 	ctx := context.Background()
 	name := "geth-1-archive-100-1746014400"
-	m, err := upload.Run(ctx, be, "", upload.Options{
+	m, _, err := upload.Run(ctx, be, "", upload.Options{
 		DataDir: srcDataDir,
 		Name:    name,
 		Role:    snapshot.RoleArchive,
@@ -77,7 +77,7 @@ func TestRoundTrip(t *testing.T) {
 		}
 	}
 
-	if _, err := download.Run(ctx, be, "", download.Options{
+	if _, _, err := download.Run(ctx, be, "", download.Options{
 		DataDir: dstDataDir,
 		Name:    name,
 	}); err != nil {
@@ -109,7 +109,7 @@ func TestRoundTripParallel(t *testing.T) {
 
 	ctx := context.Background()
 	name := "geth-1-archive-100-1746014400"
-	if _, err := upload.Run(ctx, be, "", upload.Options{
+	if _, _, err := upload.Run(ctx, be, "", upload.Options{
 		DataDir:       srcDataDir,
 		Name:          name,
 		Role:          snapshot.RoleArchive,
@@ -119,7 +119,7 @@ func TestRoundTripParallel(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("parallel upload: %v", err)
 	}
-	if _, err := download.Run(ctx, be, "", download.Options{
+	if _, _, err := download.Run(ctx, be, "", download.Options{
 		DataDir:       dstDataDir,
 		Name:          name,
 		ParallelParts: 4,
@@ -154,7 +154,7 @@ func TestRoundTripHBSS(t *testing.T) {
 
 	ctx := context.Background()
 	name := "geth-1-full-50-1746014400"
-	m, err := upload.Run(ctx, be, "", upload.Options{
+	m, _, err := upload.Run(ctx, be, "", upload.Options{
 		DataDir: srcDataDir,
 		Name:    name,
 		Role:    snapshot.RoleFull,
@@ -171,7 +171,7 @@ func TestRoundTripHBSS(t *testing.T) {
 		t.Errorf("state scheme: got %q, want hash (no triedb/)", m.StateScheme)
 	}
 
-	if _, err := download.Run(ctx, be, "", download.Options{
+	if _, _, err := download.Run(ctx, be, "", download.Options{
 		DataDir: dstDataDir,
 		Name:    name,
 	}); err != nil {
@@ -199,7 +199,7 @@ func TestUploadRefusesUnexpectedAncientEntry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = upload.Run(context.Background(), be, "", upload.Options{
+	_, _, err = upload.Run(context.Background(), be, "", upload.Options{
 		DataDir: srcDataDir,
 		Name:    "geth-1-archive-100-1746014400",
 		Role:    snapshot.RoleArchive,
@@ -234,11 +234,11 @@ func TestUploadRefusesLockedDatadir(t *testing.T) {
 		Block:   100,
 		ChainID: 1,
 	}
-	if _, err := upload.Run(ctx, be, "", opts); err == nil {
+	if _, _, err := upload.Run(ctx, be, "", opts); err == nil {
 		t.Fatalf("expected upload to refuse locked datadir")
 	}
 	opts.Force = true
-	if _, err := upload.Run(ctx, be, "", opts); err != nil {
+	if _, _, err := upload.Run(ctx, be, "", opts); err != nil {
 		t.Fatalf("upload with --force: %v", err)
 	}
 }
@@ -261,7 +261,7 @@ func TestDownloadAtomicOnFailure(t *testing.T) {
 	}
 	ctx := context.Background()
 	name := "geth-1-archive-100-1746014400"
-	if _, err := upload.Run(ctx, be, "", upload.Options{
+	if _, _, err := upload.Run(ctx, be, "", upload.Options{
 		DataDir: srcDataDir,
 		Name:    name,
 		Role:    snapshot.RoleArchive,
@@ -289,7 +289,7 @@ func TestDownloadAtomicOnFailure(t *testing.T) {
 	// A non-empty datadir to prove --force preserves the original on failure.
 	mustWrite(t, filepath.Join(dstDataDir, "geth", "preexisting.txt"), []byte("keep me"))
 
-	_, err = download.Run(ctx, be, "", download.Options{
+	_, _, err = download.Run(ctx, be, "", download.Options{
 		DataDir: dstDataDir,
 		Name:    name,
 		Force:   true,
@@ -342,7 +342,7 @@ func TestUploadAbortsPartialPartViaUnexpectedAncient(t *testing.T) {
 		t.Fatal(err)
 	}
 	name := "geth-1-archive-100-1746014400"
-	_, err = upload.Run(context.Background(), be, "", upload.Options{
+	_, _, err = upload.Run(context.Background(), be, "", upload.Options{
 		DataDir: srcDataDir,
 		Name:    name,
 		Role:    snapshot.RoleArchive,

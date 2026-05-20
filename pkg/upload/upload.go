@@ -68,12 +68,38 @@ type Options struct {
 	ParallelParts int
 }
 
+// Stats captures wall-clock and per-part timings from a single Run.
+// Returned alongside the manifest so the CLI (or any caller) can render
+// a roll-up summary without recomputing the math. Durations are not
+// stored in the manifest itself — they're a property of the operation
+// that produced the snapshot, not of the snapshot.
+type Stats struct {
+	// Elapsed is the total wall-clock from Run entry to manifest commit.
+	// With ParallelParts > 1, this is the outer wall-clock — typically
+	// less than the sum of PartStats.Elapsed.
+	Elapsed time.Duration
+
+	// Parts is one entry per uploaded part, in canonical manifest order.
+	// Includes only parts that actually uploaded (skipped HBSS-optional
+	// parts don't appear).
+	Parts []PartStats
+}
+
+// PartStats records how long one part took to stream and upload.
+type PartStats struct {
+	Kind    snapshot.PartKind
+	Name    string        // e.g. "parts/chaindata-live.tar.zst"
+	Elapsed time.Duration // includes tar walk + zstd encode + S3 multipart
+}
+
 // Run executes the upload to dst at prefix. prefix is the in-backend key
 // prefix returned by backend.Open; the snapshot's manifest and parts are
 // written under prefix/<name>/.
-func Run(ctx context.Context, dst backend.Backend, prefix string, opts Options) (*snapshot.Manifest, error) {
+func Run(ctx context.Context, dst backend.Backend, prefix string, opts Options) (*snapshot.Manifest, *Stats, error) {
+	runStart := time.Now()
+
 	if err := opts.validate(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if opts.Level == 0 {
 		opts.Level = codec.DefaultZstdLevel
@@ -84,12 +110,12 @@ func Run(ctx context.Context, dst backend.Backend, prefix string, opts Options) 
 
 	gethDir := filepath.Join(opts.DataDir, "geth")
 	if err := preflight(gethDir, opts.Force); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	stateScheme, err := detectStateScheme(gethDir)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	manifest := &snapshot.Manifest{
@@ -106,26 +132,29 @@ func Run(ctx context.Context, dst backend.Backend, prefix string, opts Options) 
 	}
 
 	if err := validateAncientLayout(filepath.Join(gethDir, "chaindata", "ancient")); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	planned, err := planParts(gethDir, prefix, opts)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	parts, err := uploadParts(ctx, dst, planned, opts.ParallelParts)
+	parts, partStats, err := uploadParts(ctx, dst, planned, opts.ParallelParts)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	manifest.Parts = parts
 
 	if err := manifest.Validate(); err != nil {
-		return nil, fmt.Errorf("manifest invalid: %w", err)
+		return nil, nil, fmt.Errorf("manifest invalid: %w", err)
 	}
 	if err := writeManifest(ctx, dst, prefix, opts.Name, manifest); err != nil {
-		return nil, fmt.Errorf("write manifest: %w", err)
+		return nil, nil, fmt.Errorf("write manifest: %w", err)
 	}
-	return manifest, nil
+	return manifest, &Stats{
+		Elapsed: time.Since(runStart),
+		Parts:   partStats,
+	}, nil
 }
 
 func (o Options) validate() error {
@@ -353,7 +382,11 @@ func withPart(common partRequest, partPath string, kind snapshot.PartKind, sub s
 // slice in canonical (planned) order regardless of completion order.
 // First error cancels in-flight workers; remaining parts unwind cleanly
 // via the existing Abort path on context cancellation.
-func uploadParts(ctx context.Context, dst backend.Backend, planned []plannedPart, parallelN int) ([]snapshot.Part, error) {
+//
+// Per-part wall-clocks are captured into a parallel slice and returned
+// alongside the parts, so the caller can report durations in the final
+// summary without re-instrumenting the pipeline.
+func uploadParts(ctx context.Context, dst backend.Backend, planned []plannedPart, parallelN int) ([]snapshot.Part, []PartStats, error) {
 	if parallelN < 1 {
 		parallelN = 1
 	}
@@ -365,6 +398,7 @@ func uploadParts(ctx context.Context, dst backend.Backend, planned []plannedPart
 	defer cancel()
 
 	results := make([]snapshot.Part, len(planned))
+	stats := make([]PartStats, len(planned))
 	var (
 		firstErr error
 		errMu    sync.Mutex
@@ -389,19 +423,25 @@ func uploadParts(ctx context.Context, dst backend.Backend, planned []plannedPart
 		go func(i int, pp plannedPart) {
 			defer wg.Done()
 			defer func() { <-sem }()
+			partStart := time.Now()
 			p, err := uploadPart(runCtx, dst, pp.req)
 			if err != nil {
 				recordErr(fmt.Errorf("upload %s: %w", pp.kind, err))
 				return
 			}
 			results[i] = p
+			stats[i] = PartStats{
+				Kind:    pp.kind,
+				Name:    pp.req.PartPath,
+				Elapsed: time.Since(partStart),
+			}
 		}(i, pp)
 	}
 	wg.Wait()
 	if firstErr != nil {
-		return nil, firstErr
+		return nil, nil, firstErr
 	}
-	return results, nil
+	return results, stats, nil
 }
 
 func uploadPart(ctx context.Context, be backend.Backend, req partRequest) (snapshot.Part, error) {

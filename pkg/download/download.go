@@ -12,6 +12,7 @@ import (
 	"path"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/s1na/geth-ferry/pkg/backend"
 	"github.com/s1na/geth-ferry/pkg/codec"
@@ -43,6 +44,26 @@ type Options struct {
 	ParallelParts int
 }
 
+// Stats captures wall-clock and per-part timings from a single Run.
+// Returned alongside the manifest so the CLI (or any caller) can render
+// a roll-up summary without recomputing the math.
+type Stats struct {
+	// Elapsed is the total wall-clock from Run entry to atomic promote.
+	// With ParallelParts > 1, this is the outer wall-clock — typically
+	// less than the sum of PartStats.Elapsed.
+	Elapsed time.Duration
+
+	// Parts is one entry per downloaded part, in manifest order.
+	Parts []PartStats
+}
+
+// PartStats records how long one part took to fetch, verify, and extract.
+type PartStats struct {
+	Kind    snapshot.PartKind
+	Name    string        // e.g. "parts/chaindata-live.tar.zst"
+	Elapsed time.Duration // includes S3 GET + zstd decode + tar extract + sha256
+}
+
 // Run downloads and extracts the snapshot at prefix/name from src.
 //
 // Extraction is atomic: parts are written into a scratch directory next to
@@ -51,18 +72,20 @@ type Options struct {
 // state behind. When opts.Force is set and <DataDir>/geth/ already
 // exists, the original is removed only at promote time — a failure
 // midway through doesn't damage the existing tree.
-func Run(ctx context.Context, src backend.Backend, prefix string, opts Options) (*snapshot.Manifest, error) {
+func Run(ctx context.Context, src backend.Backend, prefix string, opts Options) (*snapshot.Manifest, *Stats, error) {
+	runStart := time.Now()
+
 	if opts.DataDir == "" {
-		return nil, fmt.Errorf("DataDir is required")
+		return nil, nil, fmt.Errorf("DataDir is required")
 	}
 	if opts.Name == "" {
-		return nil, fmt.Errorf("Name is required")
+		return nil, nil, fmt.Errorf("Name is required")
 	}
 
 	gethDir := filepath.Join(opts.DataDir, "geth")
 	target, err := snapshot.PrepareAtomic(gethDir, opts.Force)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	committed := false
 	defer func() {
@@ -73,23 +96,28 @@ func Run(ctx context.Context, src backend.Backend, prefix string, opts Options) 
 
 	manifest, err := fetchManifest(ctx, src, prefix, opts.Name)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	if err := downloadParts(ctx, src, prefix, opts.Name, manifest.Parts, target.Path, opts.Progress, opts.ParallelParts); err != nil {
-		return nil, err
+	partStats, err := downloadParts(ctx, src, prefix, opts.Name, manifest.Parts, target.Path, opts.Progress, opts.ParallelParts)
+	if err != nil {
+		return nil, nil, err
 	}
 	if err := target.Commit(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	committed = true
-	return manifest, nil
+	return manifest, &Stats{
+		Elapsed: time.Since(runStart),
+		Parts:   partStats,
+	}, nil
 }
 
 // downloadParts dispatches part fetch+verify+extract through a worker
 // pool of size parallelN (clamped to 1..len(parts)). First error cancels
 // the run; the caller's Abort on the atomic target wipes the scratch.
-func downloadParts(ctx context.Context, src backend.Backend, prefix, name string, parts []snapshot.Part, gethDir string, progressOut io.Writer, parallelN int) error {
+// Per-part wall-clocks are captured for the caller's summary.
+func downloadParts(ctx context.Context, src backend.Backend, prefix, name string, parts []snapshot.Part, gethDir string, progressOut io.Writer, parallelN int) ([]PartStats, error) {
 	if parallelN < 1 {
 		parallelN = 1
 	}
@@ -100,6 +128,7 @@ func downloadParts(ctx context.Context, src backend.Backend, prefix, name string
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	stats := make([]PartStats, len(parts))
 	var (
 		firstErr error
 		errMu    sync.Mutex
@@ -115,22 +144,32 @@ func downloadParts(ctx context.Context, src backend.Backend, prefix, name string
 
 	sem := make(chan struct{}, parallelN)
 	var wg sync.WaitGroup
-	for _, p := range parts {
+	for i, p := range parts {
 		if runCtx.Err() != nil {
 			break
 		}
 		sem <- struct{}{}
 		wg.Add(1)
-		go func(p snapshot.Part) {
+		go func(i int, p snapshot.Part) {
 			defer wg.Done()
 			defer func() { <-sem }()
+			partStart := time.Now()
 			if err := downloadPart(runCtx, src, prefix, name, p, gethDir, progressOut); err != nil {
 				recordErr(fmt.Errorf("part %s: %w", p.Name, err))
+				return
 			}
-		}(p)
+			stats[i] = PartStats{
+				Kind:    p.Kind,
+				Name:    p.Name,
+				Elapsed: time.Since(partStart),
+			}
+		}(i, p)
 	}
 	wg.Wait()
-	return firstErr
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	return stats, nil
 }
 
 func fetchManifest(ctx context.Context, src backend.Backend, prefix, name string) (*snapshot.Manifest, error) {
