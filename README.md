@@ -55,8 +55,11 @@ snapshot's manifest to populate the chain/role/block/date columns, so
 custom names render correctly there too.
 
 Older ferry releases (≤ v0.1.0) appended a `-<unix-seconds>` tail for
-collision-avoidance; that's now provided by the upload-side check that
-refuses to overwrite an existing snapshot unless `--overwrite` is passed.
+collision-avoidance. That role is now filled by the upload-side check
+that refuses to overwrite an existing snapshot unless `--overwrite` is
+passed. v0.2.0+ neither generates nor parses the legacy 5-part form
+(though such names are still reachable by URL, since ferry treats
+custom names as opaque path segments).
 
 ## Upload
 

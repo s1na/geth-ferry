@@ -32,34 +32,30 @@ const (
 
 // Name describes a snapshot's canonical identifier:
 // geth-<chainid>-<role>-<block>. This is the shape ferry generates when
-// --name isn't supplied, and what `ferry list` will show in its NAME
-// column when an operator hasn't picked a custom name.
+// --name isn't supplied.
 //
 // Names are no longer required to match this shape — operators can pass
 // any path-safe string via --name. ParseName is kept as a utility for
 // reading the canonical shape (e.g. when displaying info derived from
 // the name alone), but ferry's source of truth for chain/role/block/
-// timestamp is the manifest.json — list fetches it per snapshot.
+// created_at is the manifest.json — list fetches it per snapshot.
 type Name struct {
-	ChainID   uint64
-	Role      Role
-	Block     uint64
-	Timestamp int64 // Unix seconds (UTC); 0 for names without an embedded timestamp
+	ChainID uint64
+	Role    Role
+	Block   uint64
 }
 
 func (n Name) String() string {
-	if n.Timestamp != 0 {
-		return fmt.Sprintf("geth-%d-%s-%d-%d",
-			n.ChainID, n.Role, n.Block, n.Timestamp)
-	}
 	return fmt.Sprintf("geth-%d-%s-%d", n.ChainID, n.Role, n.Block)
 }
 
-// nameRegexp accepts the current 4-part canonical form and the legacy
-// 5-part form with an optional 9-12 digit timestamp tail (9 digits
-// covers dates from 2001 onward; 12 covers through ~5138, so we never
-// match arbitrary trailing integers as timestamps).
-var nameRegexp = regexp.MustCompile(`^geth-(\d+)-(archive|full)-(\d+)(?:-(\d{9,12}))?$`)
+// nameRegexp matches the canonical 4-part name shape. Older ferry
+// (≤ v0.1.0) appended a -<unix-seconds> tail; v0.2.0+ doesn't generate
+// that form and no longer parses it either. Snapshots still carrying
+// the legacy tail in their on-bucket name are reachable via the URL
+// just fine (download/inspect/verify treat names as opaque), but
+// ParseName will return an error on them — fetch the manifest instead.
+var nameRegexp = regexp.MustCompile(`^geth-(\d+)-(archive|full)-(\d+)$`)
 
 // ParseName parses a snapshot name into its components. Returns an error
 // when the input doesn't match the canonical shape. Use this only when
@@ -78,18 +74,10 @@ func ParseName(s string) (Name, error) {
 	if err != nil {
 		return Name{}, fmt.Errorf("block in %q: %w", s, err)
 	}
-	var ts int64
-	if m[4] != "" {
-		ts, err = strconv.ParseInt(m[4], 10, 64)
-		if err != nil {
-			return Name{}, fmt.Errorf("timestamp in %q: %w", s, err)
-		}
-	}
 	return Name{
-		ChainID:   chainID,
-		Role:      Role(m[2]),
-		Block:     block,
-		Timestamp: ts,
+		ChainID: chainID,
+		Role:    Role(m[2]),
+		Block:   block,
 	}, nil
 }
 

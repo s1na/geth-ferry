@@ -112,10 +112,12 @@ Creation time isn't in the name — it lives in `manifest.created_at`
 (Unix seconds). Earlier releases (≤ v0.1.0) appended a `-<unix-seconds>`
 tail for collision avoidance; that role is now filled by upload's
 "snapshot already exists" check, which refuses to overwrite an existing
-name unless `--overwrite` is passed. `ParseName` still accepts the
-legacy 5-part form for parsing the structured info from a canonical name
-without a manifest fetch, but its strictness is no longer enforced at
-upload.
+name unless `--overwrite` is passed. v0.2.0+ neither generates nor
+parses the legacy 5-part form. Snapshots that still carry the legacy
+tail on disk are reachable by URL just fine (download/inspect/verify
+treat names as opaque path segments) — only `ParseName` rejects them,
+and ferry doesn't call ParseName on the read path anyway (list fetches
+the manifest).
 
 State scheme is not in the name. New uploads are PBSS (we don't support
 writing HBSS); PBSS-vs-HBSS is observable from whether a `triedb.tar.zst`
