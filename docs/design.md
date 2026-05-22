@@ -84,6 +84,8 @@ secrets that should never land in a public bucket.
 
 ### Naming convention
 
+Ferry auto-generates names in the canonical shape:
+
 ```
 geth-<chainid>-<role>-<block>
 ```
@@ -95,12 +97,25 @@ geth-<chainid>-<role>-<block>
 
 Example: `geth-1-archive-23456789`.
 
+**Names are otherwise free-form.** Operators passing `--name` can use any
+path-safe string (letters, digits, `-`, `.`, `_`); the only enforced
+constraints are non-empty, no slashes, no URL metacharacters, no
+whitespace. Useful when your downstream tooling (Ansible, CI artifacts)
+has its own naming convention — pass `--name benchmarker-v2-15M` and
+ferry will accept it.
+
+The manifest is the source of truth for chain/role/block/created_at.
+`ferry list` fetches each snapshot's manifest to populate its columns,
+so custom names render correctly regardless of shape.
+
 Creation time isn't in the name — it lives in `manifest.created_at`
 (Unix seconds). Earlier releases (≤ v0.1.0) appended a `-<unix-seconds>`
 tail for collision avoidance; that role is now filled by upload's
 "snapshot already exists" check, which refuses to overwrite an existing
 name unless `--overwrite` is passed. `ParseName` still accepts the
-legacy 5-part form so existing buckets stay listable.
+legacy 5-part form for parsing the structured info from a canonical name
+without a manifest fetch, but its strictness is no longer enforced at
+upload.
 
 State scheme is not in the name. New uploads are PBSS (we don't support
 writing HBSS); PBSS-vs-HBSS is observable from whether a `triedb.tar.zst`

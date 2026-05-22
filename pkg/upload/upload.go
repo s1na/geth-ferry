@@ -179,7 +179,7 @@ func (o Options) validate() error {
 	if !o.Role.Valid() {
 		return fmt.Errorf("Role %q invalid", o.Role)
 	}
-	if _, err := snapshot.ParseName(o.Name); err != nil {
+	if err := snapshot.ValidateNamePathSafety(o.Name); err != nil {
 		return err
 	}
 	return nil

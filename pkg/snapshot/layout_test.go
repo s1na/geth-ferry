@@ -105,6 +105,42 @@ func TestNameString(t *testing.T) {
 	}
 }
 
+func TestValidateNamePathSafety(t *testing.T) {
+	ok := []string{
+		// Canonical shape.
+		"geth-1-archive-23456789",
+		"geth-11155111-full-100",
+		// Legacy 5-part form.
+		"geth-1-full-15000035-1778899789",
+		// Free-form, path-safe — should now be accepted.
+		"my-snapshot",
+		"benchmarker-v2",
+		"test_run_42",
+		"latest.archive",
+		"a", // single char ok
+	}
+	for _, n := range ok {
+		if err := ValidateNamePathSafety(n); err != nil {
+			t.Errorf("ValidateNamePathSafety(%q) rejected unexpectedly: %v", n, err)
+		}
+	}
+	bad := []string{
+		"",                    // empty
+		".",                   // reserved
+		"..",                  // reserved
+		"foo/bar",             // slash → unintended sub-prefix
+		"with space",          // whitespace
+		"name?query=1",        // URL metachar
+		"name#fragment",       // URL metachar
+		"name\nwith\nnewline", // control char
+	}
+	for _, n := range bad {
+		if err := ValidateNamePathSafety(n); err == nil {
+			t.Errorf("ValidateNamePathSafety(%q) accepted, expected error", n)
+		}
+	}
+}
+
 func TestIsLegacyURL(t *testing.T) {
 	cases := map[string]bool{
 		// path-only inputs

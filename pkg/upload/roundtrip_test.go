@@ -243,6 +243,78 @@ func TestUploadRefusesLockedDatadir(t *testing.T) {
 	}
 }
 
+// TestUploadAcceptsFreeFormName confirms that --name no longer has to
+// match the canonical geth-<chain>-<role>-<block> shape. Operators are
+// free to pick whatever fits their pipeline; only path-safety
+// (no slashes, no URL metacharacters) is enforced.
+func TestUploadAcceptsFreeFormName(t *testing.T) {
+	tmp := t.TempDir()
+	srcDataDir := filepath.Join(tmp, "src")
+	bucket := filepath.Join(tmp, "bucket")
+	dstDataDir := filepath.Join(tmp, "dst")
+	makeFakeDatadir(t, srcDataDir)
+
+	be, err := file.New(bucket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	name := "my-custom-snapshot-name" // intentionally NOT the canonical shape
+	if _, _, err := upload.Run(ctx, be, "", upload.Options{
+		DataDir: srcDataDir,
+		Name:    name,
+		Role:    snapshot.RoleArchive,
+		Block:   100,
+		ChainID: 1,
+	}); err != nil {
+		t.Fatalf("upload with custom name: %v", err)
+	}
+	// Round-trip — proves the name is usable end-to-end, not just at
+	// upload-validation time.
+	if _, _, err := download.Run(ctx, be, "", download.Options{
+		DataDir: dstDataDir,
+		Name:    name,
+	}); err != nil {
+		t.Fatalf("download with custom name: %v", err)
+	}
+	assertTreesEqual(t,
+		filepath.Join(srcDataDir, "geth"),
+		filepath.Join(dstDataDir, "geth"),
+	)
+}
+
+// TestUploadRejectsUnsafeName confirms that names with path-traversal
+// or URL-meta characters still get rejected — the relaxation isn't a
+// blanket "anything goes".
+func TestUploadRejectsUnsafeName(t *testing.T) {
+	tmp := t.TempDir()
+	srcDataDir := filepath.Join(tmp, "src")
+	bucket := filepath.Join(tmp, "bucket")
+	makeFakeDatadir(t, srcDataDir)
+
+	be, err := file.New(bucket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{
+		"",             // empty
+		"with/slash",   // would create unintended sub-prefix
+		"with space",   // whitespace
+		"with?query=1", // URL metachar
+	} {
+		_, _, err := upload.Run(context.Background(), be, "", upload.Options{
+			DataDir: srcDataDir,
+			Name:    name,
+			Role:    snapshot.RoleArchive,
+			Block:   100,
+			ChainID: 1,
+		})
+		if err == nil {
+			t.Errorf("upload accepted unsafe name %q, expected error", name)
+		}
+	}
+}
+
 // TestUploadRefusesExistingSnapshot exercises the overwrite-protection
 // path: an upload to a name whose manifest.json already exists must fail
 // by default, and pass with Overwrite=true. Guards against fat-fingered

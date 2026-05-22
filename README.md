@@ -45,14 +45,18 @@ not-a-snapshot. Ferry refuses to upload if `chaindata/ancient/` contains
 anything other than `chain/` and `state/` — fail-fast on geth versions we
 don't understand.
 
-The snapshot name is `geth-<chainid>-<role>-<block>` where
-`role` ∈ `archive`, `full`. Example: `geth-1-archive-23456789`. The
-creation time is stored in `manifest.created_at` (Unix seconds). Older
-ferry releases (≤ v0.1.0) appended a `-<unix-seconds>` tail for
-collision-avoidance; that's now provided by the upload-side check
-that refuses to overwrite an existing snapshot unless `--overwrite` is
-passed. Names with the legacy timestamp tail still parse and list
-correctly.
+The auto-generated snapshot name is `geth-<chainid>-<role>-<block>`
+(e.g. `geth-1-archive-23456789`); creation time lives in
+`manifest.created_at`. **Operators are free to pass any path-safe string
+via `--name`** — letters, digits, `-`, `.`, `_` are all fine; the only
+constraint is "no slashes, no URL metacharacters, no whitespace". Names
+no longer have to match the canonical shape. `ferry list` fetches each
+snapshot's manifest to populate the chain/role/block/date columns, so
+custom names render correctly there too.
+
+Older ferry releases (≤ v0.1.0) appended a `-<unix-seconds>` tail for
+collision-avoidance; that's now provided by the upload-side check that
+refuses to overwrite an existing snapshot unless `--overwrite` is passed.
 
 ## Upload
 
@@ -85,7 +89,7 @@ Flags:
 | `--src` | (required) | datadir path (the dir containing `geth/`) |
 | `--dst` | (required) | destination URL (see Backends below) |
 | `--role` | (required) | `archive` or `full` (not derivable from on-disk state alone) |
-| `--name` | auto | `geth-<chain>-<role>-<block>` |
+| `--name` | auto | Free-form path-safe string; default is `geth-<chain>-<role>-<block>` |
 | `--block` | auto | head block; read from rawdb if unset |
 | `--chain-id` | auto | EVM chain id; read from rawdb chain config if unset |
 | `--level` | `5` | zstd level (1-22; ≥ 10 forces single-threaded streaming in klauspost/compress) |

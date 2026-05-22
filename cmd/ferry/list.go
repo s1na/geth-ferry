@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path"
 	"sort"
 	"strings"
+	"sync"
 	"text/tabwriter"
 	"time"
 
@@ -16,22 +19,25 @@ import (
 	"github.com/s1na/geth-ferry/pkg/snapshot"
 )
 
-// listEntry is the structured form of one row in `ferry list`. Used for
-// JSON output; the text formatter renders it as columns.
+// listEntry is the structured form of one row in `ferry list`. Fields
+// other than Name and TotalSize come from the manifest.json (fetched
+// per snapshot). When a manifest fails to fetch or decode, those fields
+// stay zero/empty and the text formatter renders dashes.
 type listEntry struct {
-	Name string `json:"name"`
-	// ChainID / Role / Block are populated when the name parses (i.e.
-	// matches the geth-<chain>-<role>-<block>[-<ts>] shape).
-	ChainID uint64 `json:"chain_id,omitempty"`
-	Role    string `json:"role,omitempty"`
-	Block   uint64 `json:"block,omitempty"`
-	// Timestamp is the snapshot's creation time as Unix seconds. Sourced
-	// from the name's trailing -<unix-seconds> if present (legacy form);
-	// otherwise from the manifest object's modification time as a
-	// best-effort approximation. Zero only when neither is available.
-	Timestamp int64 `json:"timestamp,omitempty"`
-	TotalSize int64 `json:"total_size"` // sum of object sizes under the snapshot prefix
+	Name        string `json:"name"`
+	ChainID     uint64 `json:"chain_id,omitempty"`
+	Role        string `json:"role,omitempty"`
+	Block       uint64 `json:"block,omitempty"`
+	StateScheme string `json:"state_scheme,omitempty"`
+	Timestamp   int64  `json:"timestamp,omitempty"` // manifest.created_at, Unix seconds
+	TotalSize   int64  `json:"total_size"`          // sum of object sizes under the snapshot prefix
 }
+
+// manifestFetchConcurrency bounds how many manifest GETs are in flight
+// at once during `ferry list`. Each manifest is ~2 KiB, so the bottleneck
+// is round-trip latency rather than bandwidth — moderate parallelism is
+// fine even from a workstation.
+const manifestFetchConcurrency = 8
 
 func listCmd() *cobra.Command {
 	var (
@@ -53,6 +59,7 @@ func listCmd() *cobra.Command {
 			}
 
 			entries := groupSnapshots(objs, prefix)
+			fetchManifests(ctx, be, prefix, entries)
 			sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
 
 			if jsonOut {
@@ -65,8 +72,7 @@ func listCmd() *cobra.Command {
 			defer tw.Flush()
 			fmt.Fprintln(tw, "NAME\tCHAIN\tROLE\tBLOCK\tDATE\tSIZE")
 			for _, e := range entries {
-				// An unparseable name leaves Role empty; render dashes
-				// for everything except name + size in that case.
+				// No manifest info → dashes in everything except name + size.
 				if e.Role == "" {
 					fmt.Fprintf(tw, "%s\t-\t-\t-\t-\t%s\n", e.Name, progress.HumanBytes(e.TotalSize))
 					continue
@@ -92,7 +98,8 @@ func listCmd() *cobra.Command {
 // groupSnapshots reduces the flat object list into one row per snapshot.
 // A "snapshot" is identified by the presence of a manifest.json under
 // <prefix>/<name>/; objects under <prefix>/<name>/parts/* contribute to
-// that row's TotalSize.
+// that row's TotalSize. Per-snapshot metadata (chain/role/block/date)
+// is filled in by fetchManifests on the returned slice.
 func groupSnapshots(objs []backend.Object, prefix string) []listEntry {
 	byName := map[string]*listEntry{}
 
@@ -106,20 +113,7 @@ func groupSnapshots(objs []backend.Object, prefix string) []listEntry {
 		if name == "" || name == "." || name == "/" {
 			continue
 		}
-		e := &listEntry{Name: name}
-		if meta, err := snapshot.ParseName(name); err == nil {
-			e.ChainID = meta.ChainID
-			e.Role = string(meta.Role)
-			e.Block = meta.Block
-			e.Timestamp = meta.Timestamp
-		}
-		// Fall back to the manifest object's mtime when the name doesn't
-		// carry a timestamp (new 4-part naming). Best-effort: not every
-		// backend populates ModTime.
-		if e.Timestamp == 0 && !o.ModTime.IsZero() {
-			e.Timestamp = o.ModTime.Unix()
-		}
-		byName[name] = e
+		byName[name] = &listEntry{Name: name}
 	}
 
 	// Pass 2: attribute object sizes back to the discovered snapshots.
@@ -142,4 +136,53 @@ func groupSnapshots(objs []backend.Object, prefix string) []listEntry {
 		out = append(out, *e)
 	}
 	return out
+}
+
+// fetchManifests populates ChainID/Role/Block/StateScheme/Timestamp on
+// each entry by fetching <prefix>/<name>/manifest.json from the backend.
+// Snapshots whose manifest fails to fetch or decode keep the zero values
+// and get rendered as dashes by the text formatter; this matches the
+// graceful-degradation behavior the previous name-parsing path had.
+//
+// Bounded parallelism (manifestFetchConcurrency); cancels on context.
+func fetchManifests(ctx context.Context, be backend.Backend, prefix string, entries []listEntry) {
+	sem := make(chan struct{}, manifestFetchConcurrency)
+	var wg sync.WaitGroup
+	for i := range entries {
+		if ctx.Err() != nil {
+			break
+		}
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			m, err := fetchManifest(ctx, be, prefix, entries[i].Name)
+			if err != nil {
+				return // leave zero values; renderer shows dashes
+			}
+			entries[i].ChainID = m.ChainID
+			entries[i].Role = string(m.Role)
+			entries[i].Block = m.Head.Block
+			entries[i].StateScheme = string(m.StateScheme)
+			entries[i].Timestamp = m.CreatedAt
+		}(i)
+	}
+	wg.Wait()
+}
+
+func fetchManifest(ctx context.Context, be backend.Backend, prefix, name string) (*snapshot.Manifest, error) {
+	key := path.Join(prefix, name, snapshot.ManifestFilename)
+	r, err := be.Get(ctx, key)
+	if err != nil {
+		// ErrNotExist shouldn't happen (groupSnapshots only listed names
+		// whose manifest.json appeared in the bucket listing), but stay
+		// graceful in case the bucket changed between list and get.
+		if errors.Is(err, backend.ErrNotExist) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("get manifest for %s: %w", name, err)
+	}
+	defer r.Close()
+	return snapshot.Decode(r)
 }

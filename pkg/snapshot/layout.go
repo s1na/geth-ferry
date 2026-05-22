@@ -30,16 +30,16 @@ const (
 	TriedbPart = "parts/triedb.tar.zst"
 )
 
-// Name describes a snapshot's identifier:
-// geth-<chainid>-<role>-<block>.
+// Name describes a snapshot's canonical identifier:
+// geth-<chainid>-<role>-<block>. This is the shape ferry generates when
+// --name isn't supplied, and what `ferry list` will show in its NAME
+// column when an operator hasn't picked a custom name.
 //
-// Earlier versions of ferry appended a -<unix-seconds> tail for
-// collision avoidance; that is now provided by the upload's
-// "snapshot already exists" preflight (see Options.Overwrite). The
-// parser still accepts the legacy 5-part form so existing buckets stay
-// readable — when the timestamp is present in the name, it's stored on
-// Name.Timestamp; otherwise that field is zero and callers should fall
-// back to the manifest's CreatedAt or the object's modification time.
+// Names are no longer required to match this shape — operators can pass
+// any path-safe string via --name. ParseName is kept as a utility for
+// reading the canonical shape (e.g. when displaying info derived from
+// the name alone), but ferry's source of truth for chain/role/block/
+// timestamp is the manifest.json — list fetches it per snapshot.
 type Name struct {
 	ChainID   uint64
 	Role      Role
@@ -55,14 +55,16 @@ func (n Name) String() string {
 	return fmt.Sprintf("geth-%d-%s-%d", n.ChainID, n.Role, n.Block)
 }
 
-// nameRegexp accepts the current 4-part form and the legacy 5-part form
-// with an optional 9-12 digit timestamp tail (9 digits covers dates from
-// 2001 onward; 12 covers through ~5138, so we never match arbitrary
-// trailing integers as timestamps).
+// nameRegexp accepts the current 4-part canonical form and the legacy
+// 5-part form with an optional 9-12 digit timestamp tail (9 digits
+// covers dates from 2001 onward; 12 covers through ~5138, so we never
+// match arbitrary trailing integers as timestamps).
 var nameRegexp = regexp.MustCompile(`^geth-(\d+)-(archive|full)-(\d+)(?:-(\d{9,12}))?$`)
 
-// ParseName parses a snapshot name into its components. Returns an error if
-// the input doesn't match the expected shape.
+// ParseName parses a snapshot name into its components. Returns an error
+// when the input doesn't match the canonical shape. Use this only when
+// you need the structured info from the name itself; for authoritative
+// chain/role/block/created_at, fetch the manifest.
 func ParseName(s string) (Name, error) {
 	m := nameRegexp.FindStringSubmatch(s)
 	if m == nil {
@@ -89,6 +91,30 @@ func ParseName(s string) (Name, error) {
 		Block:     block,
 		Timestamp: ts,
 	}, nil
+}
+
+// nameSafetyRegexp is the conservative charset ferry insists on for
+// --name. Allows letters, digits, dashes, dots, underscores. Forbids
+// slashes (would create unintended sub-prefixes), query/fragment
+// separators (URL footguns), and whitespace.
+var nameSafetyRegexp = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// ValidateNamePathSafety enforces the minimum constraints ferry needs to
+// use a snapshot name as a path segment: non-empty, no slashes, no URL
+// metacharacters, no whitespace. Stricter validation (the canonical
+// geth-chain-role-block shape) is no longer enforced — operators are
+// free to pick whatever fits their pipeline.
+func ValidateNamePathSafety(name string) error {
+	if name == "" {
+		return fmt.Errorf("snapshot name is empty")
+	}
+	if name == "." || name == ".." {
+		return fmt.Errorf("snapshot name %q is reserved", name)
+	}
+	if !nameSafetyRegexp.MatchString(name) {
+		return fmt.Errorf("snapshot name %q has invalid characters; allowed: letters, digits, '-', '.', '_'", name)
+	}
+	return nil
 }
 
 // Key joins the snapshot name with a child path, normalizing separators.
