@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -55,6 +56,13 @@ type Options struct {
 
 	// Force skips the LOCK / .ipc safety check.
 	Force bool
+
+	// Overwrite allows the upload to proceed when a snapshot with the same
+	// Name already exists at the destination (i.e. its manifest.json is
+	// present). Default behavior is to refuse — re-using a name silently
+	// would replace published bytes that downstream consumers may have
+	// pinned by sha256.
+	Overwrite bool
 
 	// Progress, when non-nil, receives a label per part and a stream wrap
 	// callback. Used by the CLI to emit periodic "[label] X bytes, Y/s"
@@ -110,6 +118,10 @@ func Run(ctx context.Context, dst backend.Backend, prefix string, opts Options) 
 
 	gethDir := filepath.Join(opts.DataDir, "geth")
 	if err := preflight(gethDir, opts.Force); err != nil {
+		return nil, nil, err
+	}
+
+	if err := checkOverwrite(ctx, dst, prefix, opts.Name, opts.Overwrite); err != nil {
 		return nil, nil, err
 	}
 
@@ -169,6 +181,33 @@ func (o Options) validate() error {
 	}
 	if _, err := snapshot.ParseName(o.Name); err != nil {
 		return err
+	}
+	return nil
+}
+
+// checkOverwrite refuses to proceed when a manifest.json already exists at
+// the destination, unless the caller opted in via Options.Overwrite.
+//
+// The manifest is the integrity marker for "snapshot exists" (per the
+// design — it's written last, so its absence means an interrupted upload
+// or no prior snapshot at this name). Re-using a name silently would
+// replace bytes that downstream consumers may have pinned by sha256, so
+// the default is loud refusal.
+//
+// Partial leftover state (parts/ exist but no manifest) is NOT treated as
+// an existing snapshot — those bytes will be overwritten naturally as
+// the new upload's parts go through their multipart-Put paths.
+func checkOverwrite(ctx context.Context, dst backend.Backend, prefix, name string, overwrite bool) error {
+	if overwrite {
+		return nil
+	}
+	key := path.Join(prefix, name, snapshot.ManifestFilename)
+	_, err := dst.Stat(ctx, key)
+	if err == nil {
+		return fmt.Errorf("snapshot %q already exists at destination; pass --overwrite to replace it", name)
+	}
+	if !errors.Is(err, backend.ErrNotExist) {
+		return fmt.Errorf("check for existing snapshot %q: %w", name, err)
 	}
 	return nil
 }

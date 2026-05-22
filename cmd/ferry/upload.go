@@ -26,7 +26,7 @@ func uploadCmd() *cobra.Command {
 		role                                           string
 		block, chainID                                 uint64
 		level, threads                                 int
-		force, quiet                                   bool
+		force, quiet, overwrite                        bool
 		dryRun                                         bool
 		multipartSize, multipartConcurrency, parallelN int
 	)
@@ -84,6 +84,7 @@ func uploadCmd() *cobra.Command {
 				Threads:       threads,
 				CreatedBy:     "ferry/" + version,
 				Force:         force,
+				Overwrite:     overwrite,
 				Progress:      progressOut,
 				ParallelParts: parallelN,
 			})
@@ -103,6 +104,7 @@ func uploadCmd() *cobra.Command {
 	cmd.Flags().IntVar(&level, "level", 0, "zstd level (0 = default)")
 	cmd.Flags().IntVar(&threads, "threads", 0, "zstd encoder threads (0 = library default)")
 	cmd.Flags().BoolVar(&force, "force", false, "ignore preflight LOCK / .ipc check")
+	cmd.Flags().BoolVar(&overwrite, "overwrite", false, "replace an existing snapshot at the same --name (default: refuse)")
 	cmd.Flags().BoolVar(&quiet, "quiet", false, "suppress periodic progress output")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the planned upload (parts, source bytes, destination keys) and exit without writing anything")
 	cmd.Flags().IntVar(&multipartSize, "multipart-size", 0, "S3 multipart part size in bytes (0 = backend default, 256 MiB)")

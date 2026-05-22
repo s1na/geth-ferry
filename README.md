@@ -89,6 +89,7 @@ Flags:
 | `--multipart-size` | `0` (= 256 MiB) | S3 multipart part size, bytes. With S3's 10 000-part cap, the default caps a single object at ~2.5 TiB |
 | `--multipart-concurrency` | `0` (= 5) | max in-flight UploadPart requests per object |
 | `--force` | `false` | ignore preflight LOCK / .ipc check |
+| `--overwrite` | `false` | replace an existing snapshot at the same `--name` (default: refuse with an error) |
 | `--quiet` | `false` | suppress periodic progress output on stderr |
 | `--dry-run` | `false` | print the planned upload (parts, source bytes, destination keys) and exit without writing anything |
 

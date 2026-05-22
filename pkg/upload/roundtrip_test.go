@@ -243,6 +243,53 @@ func TestUploadRefusesLockedDatadir(t *testing.T) {
 	}
 }
 
+// TestUploadRefusesExistingSnapshot exercises the overwrite-protection
+// path: an upload to a name whose manifest.json already exists must fail
+// by default, and pass with Overwrite=true. Guards against fat-fingered
+// --name re-use silently replacing a published snapshot whose sha256
+// downstream consumers may have pinned.
+func TestUploadRefusesExistingSnapshot(t *testing.T) {
+	tmp := t.TempDir()
+	srcDataDir := filepath.Join(tmp, "src")
+	bucket := filepath.Join(tmp, "bucket")
+
+	makeFakeDatadir(t, srcDataDir)
+
+	be, err := file.New(bucket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	name := "geth-1-archive-100-1746014400"
+	opts := upload.Options{
+		DataDir: srcDataDir,
+		Name:    name,
+		Role:    snapshot.RoleArchive,
+		Block:   100,
+		ChainID: 1,
+	}
+
+	// Seed: one successful upload.
+	if _, _, err := upload.Run(ctx, be, "", opts); err != nil {
+		t.Fatalf("seed upload: %v", err)
+	}
+
+	// Re-upload same name must refuse.
+	_, _, err = upload.Run(ctx, be, "", opts)
+	if err == nil {
+		t.Fatalf("expected re-upload to refuse existing snapshot, got nil")
+	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("expected 'already exists' in error, got: %v", err)
+	}
+
+	// Same upload with Overwrite=true must succeed.
+	opts.Overwrite = true
+	if _, _, err := upload.Run(ctx, be, "", opts); err != nil {
+		t.Fatalf("re-upload with Overwrite=true: %v", err)
+	}
+}
+
 // TestDownloadAtomicOnFailure proves that a download failure (here:
 // tampered manifest sha256) leaves the destination datadir untouched
 // rather than half-populated. Pre-atomic ferry would have extracted
