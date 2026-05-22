@@ -85,17 +85,22 @@ secrets that should never land in a public bucket.
 ### Naming convention
 
 ```
-geth-<chainid>-<role>-<block>-<unix-seconds>
+geth-<chainid>-<role>-<block>
 ```
 
 - `geth` — fixed prefix marking the producing client.
 - `chainid` — EVM chain ID (`1` mainnet, `11155111` sepolia).
 - `role` — `archive` or `full`. That's the whole taxonomy.
 - `block` — head block number at the moment geth was stopped.
-- `unix-seconds` — snapshot creation time, matching
-  `manifest.created_at`. Locale-free, unambiguously orderable.
 
-Example: `geth-1-archive-23456789-1746014400`.
+Example: `geth-1-archive-23456789`.
+
+Creation time isn't in the name — it lives in `manifest.created_at`
+(Unix seconds). Earlier releases (≤ v0.1.0) appended a `-<unix-seconds>`
+tail for collision avoidance; that role is now filled by upload's
+"snapshot already exists" check, which refuses to overwrite an existing
+name unless `--overwrite` is passed. `ParseName` still accepts the
+legacy 5-part form so existing buckets stay listable.
 
 State scheme is not in the name. New uploads are PBSS (we don't support
 writing HBSS); PBSS-vs-HBSS is observable from whether a `triedb.tar.zst`
@@ -119,7 +124,7 @@ configurable via `--level`, but going above 5 is rarely worth it.
 ```json
 {
   "version": 1,
-  "name": "geth-1-archive-23456789-1746014400",
+  "name": "geth-1-archive-23456789",
   "chain_id": 1,
   "role": "archive",
   "state_scheme": "path",

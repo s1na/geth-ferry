@@ -31,27 +31,35 @@ const (
 )
 
 // Name describes a snapshot's identifier:
-// geth-<chainid>-<role>-<block>-<unix-seconds>.
+// geth-<chainid>-<role>-<block>.
 //
-// The trailing component is a Unix timestamp (seconds since epoch, UTC) —
-// matches `manifest.created_at`'s format and is unambiguously orderable
-// without locale/timezone games.
+// Earlier versions of ferry appended a -<unix-seconds> tail for
+// collision avoidance; that is now provided by the upload's
+// "snapshot already exists" preflight (see Options.Overwrite). The
+// parser still accepts the legacy 5-part form so existing buckets stay
+// readable — when the timestamp is present in the name, it's stored on
+// Name.Timestamp; otherwise that field is zero and callers should fall
+// back to the manifest's CreatedAt or the object's modification time.
 type Name struct {
 	ChainID   uint64
 	Role      Role
 	Block     uint64
-	Timestamp int64 // Unix seconds (UTC)
+	Timestamp int64 // Unix seconds (UTC); 0 for names without an embedded timestamp
 }
 
 func (n Name) String() string {
-	return fmt.Sprintf("geth-%d-%s-%d-%d",
-		n.ChainID, n.Role, n.Block, n.Timestamp)
+	if n.Timestamp != 0 {
+		return fmt.Sprintf("geth-%d-%s-%d-%d",
+			n.ChainID, n.Role, n.Block, n.Timestamp)
+	}
+	return fmt.Sprintf("geth-%d-%s-%d", n.ChainID, n.Role, n.Block)
 }
 
-// nameRegexp accepts a 9- to 12-digit timestamp tail. 9 digits covers
-// dates up to 2001; 12 covers through ~5138. Plenty of room without
-// matching arbitrary integers.
-var nameRegexp = regexp.MustCompile(`^geth-(\d+)-(archive|full)-(\d+)-(\d{9,12})$`)
+// nameRegexp accepts the current 4-part form and the legacy 5-part form
+// with an optional 9-12 digit timestamp tail (9 digits covers dates from
+// 2001 onward; 12 covers through ~5138, so we never match arbitrary
+// trailing integers as timestamps).
+var nameRegexp = regexp.MustCompile(`^geth-(\d+)-(archive|full)-(\d+)(?:-(\d{9,12}))?$`)
 
 // ParseName parses a snapshot name into its components. Returns an error if
 // the input doesn't match the expected shape.
@@ -68,9 +76,12 @@ func ParseName(s string) (Name, error) {
 	if err != nil {
 		return Name{}, fmt.Errorf("block in %q: %w", s, err)
 	}
-	ts, err := strconv.ParseInt(m[4], 10, 64)
-	if err != nil {
-		return Name{}, fmt.Errorf("timestamp in %q: %w", s, err)
+	var ts int64
+	if m[4] != "" {
+		ts, err = strconv.ParseInt(m[4], 10, 64)
+		if err != nil {
+			return Name{}, fmt.Errorf("timestamp in %q: %w", s, err)
+		}
 	}
 	return Name{
 		ChainID:   chainID,

@@ -52,8 +52,7 @@ func uploadCmd() *cobra.Command {
 					chainID = info.ChainID
 				}
 				if !nameSet {
-					name = fmt.Sprintf("geth-%d-%s-%d-%d",
-						chainID, role, block, time.Now().Unix())
+					name = fmt.Sprintf("geth-%d-%s-%d", chainID, role, block)
 				}
 				fmt.Fprintf(os.Stderr, "auto-detected: name=%s chain_id=%d head=%d state_scheme=%s\n",
 					name, chainID, block, info.StateScheme)

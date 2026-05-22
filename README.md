@@ -45,9 +45,14 @@ not-a-snapshot. Ferry refuses to upload if `chaindata/ancient/` contains
 anything other than `chain/` and `state/` — fail-fast on geth versions we
 don't understand.
 
-The snapshot name is `geth-<chainid>-<role>-<block>-<unix-seconds>` where
-`role` ∈ `archive`, `full`. The trailing component is a Unix timestamp,
-matching `manifest.created_at`. Example: `geth-1-archive-23456789-1746014400`.
+The snapshot name is `geth-<chainid>-<role>-<block>` where
+`role` ∈ `archive`, `full`. Example: `geth-1-archive-23456789`. The
+creation time is stored in `manifest.created_at` (Unix seconds). Older
+ferry releases (≤ v0.1.0) appended a `-<unix-seconds>` tail for
+collision-avoidance; that's now provided by the upload-side check
+that refuses to overwrite an existing snapshot unless `--overwrite` is
+passed. Names with the legacy timestamp tail still parse and list
+correctly.
 
 ## Upload
 
@@ -68,7 +73,7 @@ automatically (geth must be stopped — pebble's flock is exclusive).
 You'll see a line like:
 
 ```
-auto-detected: name=geth-1-archive-23456789-1746014400 chain_id=1 head=23456789 state_scheme=path
+auto-detected: name=geth-1-archive-23456789 chain_id=1 head=23456789 state_scheme=path
 ```
 
 before the upload starts. Pass any of the three explicitly to override.
@@ -80,7 +85,7 @@ Flags:
 | `--src` | (required) | datadir path (the dir containing `geth/`) |
 | `--dst` | (required) | destination URL (see Backends below) |
 | `--role` | (required) | `archive` or `full` (not derivable from on-disk state alone) |
-| `--name` | auto | `geth-<chain>-<role>-<block>-<unix-seconds>` |
+| `--name` | auto | `geth-<chain>-<role>-<block>` |
 | `--block` | auto | head block; read from rawdb if unset |
 | `--chain-id` | auto | EVM chain id; read from rawdb chain config if unset |
 | `--level` | `5` | zstd level (1-22; ≥ 10 forces single-threaded streaming in klauspost/compress) |
@@ -114,7 +119,7 @@ established the total) an ETA:
 
 ```
 ferry download \
-  --src 's3://my-bucket/snapshots/geth-1-archive-23456789-1746014400?endpoint=s3.example.com&region=us-east-1' \
+  --src 's3://my-bucket/snapshots/geth-1-archive-23456789?endpoint=s3.example.com&region=us-east-1' \
   --dst /var/lib/geth
 ```
 
