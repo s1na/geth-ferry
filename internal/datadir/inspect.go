@@ -10,6 +10,8 @@
 //	"LastBlock"                            32-byte head block hash
 //	"H" + hash                             8-byte big-endian head block number
 //	"ethereum-config-" + genesisHash       JSON-encoded ChainConfig
+//	"A"                                    account trie root, path scheme (PBSS marker)
+//	"LastStateID"                          persistent state id (PBSS marker)
 //
 // Geth must be stopped (pebble's flock is exclusive even for a read-only
 // open). Pebble's on-disk format is stable across recent versions, so the
@@ -21,7 +23,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/cockroachdb/pebble"
@@ -76,15 +77,55 @@ func Inspect(datadir string) (*Info, error) {
 	info.GenesisHash = genesisHash
 	info.ChainID = chainID
 
-	if _, err := os.Stat(filepath.Join(datadir, "geth", "triedb")); err == nil {
-		info.StateScheme = "path"
-	} else if errors.Is(err, os.ErrNotExist) {
-		info.StateScheme = "hash"
-	} else {
-		return nil, fmt.Errorf("stat triedb: %w", err)
+	scheme, err := readStateScheme(db)
+	if err != nil {
+		return nil, fmt.Errorf("read state scheme: %w", err)
 	}
+	info.StateScheme = scheme
 
 	return info, nil
+}
+
+// readStateScheme determines whether the chaindata holds PBSS (path) or
+// HBSS (hash) state. Mirrors go-ethereum's rawdb.ReadStateScheme:
+//
+//  1. Probe for the account trie root in path scheme — key "A" (single
+//     byte; rawdb.TrieNodeAccountPrefix with empty path). Present on
+//     any populated PBSS chain.
+//  2. Probe for "LastStateID" — persistent state id, set by pathdb even
+//     when the root was wiped during snap-sync.
+//  3. Fall back to "hash". (A pre-v0.2.1 ferry stat'd <datadir>/geth/triedb/
+//     which only exists after a graceful PBSS shutdown writes
+//     merkle.journal — false-negatives mis-tagged actual PBSS nodes as
+//     HBSS, exactly the bug this replaces.)
+//
+// This is purely descriptive — ferry doesn't change behavior based on
+// the value, it just records it in the manifest so downloaders can
+// sanity-check before pulling a multi-TB snapshot.
+func readStateScheme(db *pebble.DB) (string, error) {
+	if has, err := keyExists(db, []byte("A")); err != nil {
+		return "", err
+	} else if has {
+		return "path", nil
+	}
+	if has, err := keyExists(db, []byte("LastStateID")); err != nil {
+		return "", err
+	} else if has {
+		return "path", nil
+	}
+	return "hash", nil
+}
+
+func keyExists(db *pebble.DB, key []byte) (bool, error) {
+	_, closer, err := db.Get(key)
+	if errors.Is(err, pebble.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	closer.Close()
+	return true, nil
 }
 
 func readHash(db *pebble.DB, key []byte) ([32]byte, error) {

@@ -43,6 +43,13 @@ type Options struct {
 	// will default to mainnet when --chain-id flag plumbing lands).
 	ChainID uint64
 
+	// StateScheme is recorded in the manifest. Empty triggers a fallback
+	// stat-of-<gethDir>/triedb/ heuristic — usable but unreliable (the
+	// directory only exists after a graceful PBSS shutdown). Callers that
+	// can determine the scheme authoritatively (e.g. via datadir.Inspect
+	// reading the chaindata's pebble) should populate this explicitly.
+	StateScheme snapshot.StateScheme
+
 	// Level is the zstd encoder level. Zero falls back to codec.DefaultZstdLevel.
 	Level int
 
@@ -125,9 +132,13 @@ func Run(ctx context.Context, dst backend.Backend, prefix string, opts Options) 
 		return nil, nil, err
 	}
 
-	stateScheme, err := detectStateScheme(gethDir)
-	if err != nil {
-		return nil, nil, err
+	stateScheme := opts.StateScheme
+	if stateScheme == "" {
+		var err error
+		stateScheme, err = detectStateScheme(gethDir)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 
 	manifest := &snapshot.Manifest{
@@ -268,9 +279,15 @@ func validateAncientLayout(ancientDir string) error {
 	return nil
 }
 
-// detectStateScheme infers PBSS vs HBSS from the presence of triedb/.
-// We never write HBSS snapshots so the caller can rely on this for the
-// manifest's state_scheme field without an explicit flag.
+// detectStateScheme is the legacy stat-based fallback used only when
+// Options.StateScheme is empty. It checks for <gethDir>/triedb/, which
+// is created by geth only on a graceful PBSS shutdown (it holds the
+// merkle.journal). A running or hard-rebooted PBSS node has no triedb/
+// yet, so this can mis-tag actual PBSS chains as HBSS.
+//
+// Callers with access to the chaindata pebble (via internal/datadir.Inspect)
+// should pass the authoritative scheme through Options.StateScheme to
+// bypass this fallback.
 func detectStateScheme(gethDir string) (snapshot.StateScheme, error) {
 	if _, err := os.Stat(filepath.Join(gethDir, "triedb")); err == nil {
 		return snapshot.StateSchemePath, nil

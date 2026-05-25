@@ -38,13 +38,11 @@ func TestInspectSyntheticPebble(t *testing.T) {
 	mustSet(t, db, canonicalKey(0), genesis[:])
 	mustSet(t, db, append([]byte("ethereum-config-"), genesis[:]...),
 		[]byte(`{"chainId": 1, "homesteadBlock": 1150000}`))
+	// PBSS marker: account trie root in path scheme (rawdb's
+	// TrieNodeAccountPrefix + empty path = single byte "A").
+	mustSet(t, db, []byte("A"), []byte{0x00})
 
 	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	// Add a triedb/ to exercise the PBSS branch.
-	if err := os.MkdirAll(filepath.Join(tmp, "geth", "triedb"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 

@@ -36,27 +36,27 @@ func uploadCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 
-			// Auto-detect any of name/block/chain-id that the user didn't pass.
-			nameSet := cmd.Flags().Changed("name")
-			blockSet := cmd.Flags().Changed("block")
-			chainIDSet := cmd.Flags().Changed("chain-id")
-			if !nameSet || !blockSet || !chainIDSet {
-				info, err := datadir.Inspect(src)
-				if err != nil {
-					return fmt.Errorf("auto-detect from %s: %w (pass --name/--block/--chain-id explicitly to bypass)", src, err)
-				}
-				if !blockSet {
-					block = info.HeadBlock
-				}
-				if !chainIDSet {
-					chainID = info.ChainID
-				}
-				if !nameSet {
-					name = fmt.Sprintf("geth-%d-%s-%d", chainID, role, block)
-				}
-				fmt.Fprintf(os.Stderr, "auto-detected: name=%s chain_id=%d head=%d state_scheme=%s\n",
-					name, chainID, block, info.StateScheme)
+			// Inspect the stopped datadir for chain-id / head / state-scheme.
+			// We always do this — even when --name / --block / --chain-id are
+			// passed explicitly — because the state scheme detection (PBSS
+			// vs HBSS) is read authoritatively from the chaindata pebble,
+			// and we want the manifest to record it correctly regardless of
+			// how the other fields were sourced.
+			info, err := datadir.Inspect(src)
+			if err != nil {
+				return fmt.Errorf("auto-detect from %s: %w (pass --name/--block/--chain-id explicitly to bypass)", src, err)
 			}
+			if !cmd.Flags().Changed("block") {
+				block = info.HeadBlock
+			}
+			if !cmd.Flags().Changed("chain-id") {
+				chainID = info.ChainID
+			}
+			if !cmd.Flags().Changed("name") {
+				name = fmt.Sprintf("geth-%d-%s-%d", chainID, role, block)
+			}
+			fmt.Fprintf(os.Stderr, "auto-detected: name=%s chain_id=%d head=%d state_scheme=%s\n",
+				name, chainID, block, info.StateScheme)
 
 			if dryRun {
 				return printPlan(os.Stdout, src, dst, name, role, block, chainID, level, threads)
@@ -79,6 +79,7 @@ func uploadCmd() *cobra.Command {
 				Role:          snapshot.Role(role),
 				Block:         block,
 				ChainID:       chainID,
+				StateScheme:   snapshot.StateScheme(info.StateScheme),
 				Level:         level,
 				Threads:       threads,
 				CreatedBy:     "ferry/" + version,
