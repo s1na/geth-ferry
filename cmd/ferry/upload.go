@@ -37,22 +37,35 @@ func uploadCmd() *cobra.Command {
 			ctx := cmd.Context()
 
 			// Inspect the stopped datadir for chain-id / head / state-scheme.
-			// We always do this — even when --name / --block / --chain-id are
-			// passed explicitly — because the state scheme detection (PBSS
-			// vs HBSS) is read authoritatively from the chaindata pebble,
+			// We try this unconditionally — even when --name / --block /
+			// --chain-id are passed explicitly — because the state-scheme
+			// detection is read authoritatively from the chaindata pebble,
 			// and we want the manifest to record it correctly regardless of
 			// how the other fields were sourced.
+			//
+			// When all three explicit flags are set, an Inspect failure is
+			// tolerated (the operator opted out of auto-detect; upload's
+			// stat-based fallback for state scheme runs). When any flag
+			// needs auto-detect, Inspect failure is fatal.
+			nameSet := cmd.Flags().Changed("name")
+			blockSet := cmd.Flags().Changed("block")
+			chainIDSet := cmd.Flags().Changed("chain-id")
+			needAutoDetect := !nameSet || !blockSet || !chainIDSet
+
 			info, err := datadir.Inspect(src)
 			if err != nil {
-				return fmt.Errorf("auto-detect from %s: %w (pass --name/--block/--chain-id explicitly to bypass)", src, err)
+				if needAutoDetect {
+					return fmt.Errorf("auto-detect from %s: %w (pass --name/--block/--chain-id explicitly to bypass)", src, err)
+				}
+				info = &datadir.Info{} // state scheme stays empty; upload falls back
 			}
-			if !cmd.Flags().Changed("block") {
+			if !blockSet {
 				block = info.HeadBlock
 			}
-			if !cmd.Flags().Changed("chain-id") {
+			if !chainIDSet {
 				chainID = info.ChainID
 			}
-			if !cmd.Flags().Changed("name") {
+			if !nameSet {
 				name = fmt.Sprintf("geth-%d-%s-%d", chainID, role, block)
 			}
 			fmt.Fprintf(os.Stderr, "auto-detected: name=%s chain_id=%d head=%d state_scheme=%s\n",
