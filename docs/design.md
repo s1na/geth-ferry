@@ -147,24 +147,67 @@ configurable via `--level`, but going above 5 is rarely worth it.
   "state_scheme": "path",
   "head": {
     "block": 23456789,
-    "hash": "0x…",
+    "hash": "9f8e7d…",
     "timestamp": 1745923200
   },
   "created_at": 1746014400,
-  "created_by": "ferry/0.1.0",
+  "created_by": "ferry/v0.2.0",
   "codec": "zstd",
   "level": 5,
   "parts": [
-    { "name": "parts/chaindata-live.tar.zst", "kind": "chaindata-live", "uncompressed_size": 2400000000000, "compressed_size": 2000000000000, "sha256": "…" },
-    { "name": "parts/ancient-chain.tar.zst",  "kind": "ancient-chain",  "uncompressed_size":  280000000000, "compressed_size":  240000000000, "sha256": "…" },
-    { "name": "parts/ancient-state.tar.zst",  "kind": "ancient-state",  "uncompressed_size":   20000000000, "compressed_size":   18000000000, "sha256": "…" },
-    { "name": "parts/triedb.tar.zst",         "kind": "triedb",         "uncompressed_size":     484363426, "compressed_size":     460000000, "sha256": "…" }
+    {
+      "name": "parts/chaindata-live.tar.zst",
+      "kind": "chaindata-live",
+      "uncompressed_size": 2400000000000,
+      "compressed_size": 2000000000000,
+      "sha256": "…",
+      "toc": { "name": "parts/chaindata-live.toc.zst", "size": 68096, "sha256": "…", "entries": 8344 }
+    },
+    {
+      "name": "parts/ancient-chain.tar.zst",
+      "kind": "ancient-chain",
+      "uncompressed_size": 280000000000,
+      "compressed_size": 240000000000,
+      "sha256": "…",
+      "toc": { "name": "parts/ancient-chain.toc.zst", "size": 1424, "sha256": "…", "entries": 226 }
+    },
+    {
+      "name": "parts/ancient-state.tar.zst",
+      "kind": "ancient-state",
+      "uncompressed_size": 20000000000,
+      "compressed_size": 18000000000,
+      "sha256": "…",
+      "toc": { "name": "parts/ancient-state.toc.zst", "size": 267, "sha256": "…", "entries": 18 }
+    },
+    {
+      "name": "parts/triedb.tar.zst",
+      "kind": "triedb",
+      "uncompressed_size": 484363426,
+      "compressed_size": 460000000,
+      "sha256": "…",
+      "toc": { "name": "parts/triedb.toc.zst", "size": 45, "sha256": "…", "entries": 1 }
+    }
   ]
 }
 ```
 
+`head.hash` is the canonical block hash at `head.block` (hex, no `0x`
+prefix); a downloader can cross-check it against the chain at the same
+height to detect a forked or wrong-chain snapshot. `head.timestamp` is
+the block's `Time` field in Unix seconds. Both are populated when ferry
+auto-detects the head from a stopped chaindata; both are dropped
+(`omitempty`) when `--block` is overridden to a value that doesn't
+match the chaindata's head.
+
 `state_scheme` is descriptive only: ferry doesn't change behavior based
 on it. It's there so a downloader can sanity-check before pulling 2 TB.
+
+Each part carries a `toc` sub-object pointing at its `.toc.zst` sidecar:
+`name`, byte `size`, `sha256`, and `entries` (the number of regular
+files the part contains). The sidecar itself is a zstd-compressed text
+stream of `<size> <name>\n` lines; `ferry contents` reads only the
+manifest plus these sidecars to list a snapshot's files without
+fetching any of the multi-hundred-GiB parts.
 
 ### Legacy compatibility
 

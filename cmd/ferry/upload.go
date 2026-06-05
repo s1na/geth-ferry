@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/hex"
 	"fmt"
 	"io"
 	"io/fs"
@@ -86,11 +87,23 @@ func uploadCmd() *cobra.Command {
 			if quiet {
 				progressOut = nil
 			}
+			// Hash and timestamp travel with Block only when they refer to
+			// the same block: i.e. Inspect saw a real head (HeadBlock != 0)
+			// and the user didn't override --block to point elsewhere.
+			var headHash string
+			var headTimestamp int64
+			if info.HeadBlock != 0 && info.HeadBlock == block {
+				headHash = hex.EncodeToString(info.HeadHash[:])
+				headTimestamp = int64(info.HeadTimestamp)
+			}
+
 			m, st, err := upload.Run(ctx, be, prefix, upload.Options{
 				DataDir:       src,
 				Name:          name,
 				Role:          snapshot.Role(role),
 				Block:         block,
+				HeadHash:      headHash,
+				HeadTimestamp: headTimestamp,
 				ChainID:       chainID,
 				StateScheme:   snapshot.StateScheme(info.StateScheme),
 				Level:         level,

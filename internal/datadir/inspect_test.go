@@ -3,6 +3,7 @@ package datadir
 import (
 	"encoding/binary"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -35,6 +36,7 @@ func TestInspectSyntheticPebble(t *testing.T) {
 	numBytes := make([]byte, 8)
 	binary.BigEndian.PutUint64(numBytes, headNum)
 	mustSet(t, db, append([]byte{'H'}, headHash[:]...), numBytes)
+	mustSet(t, db, headerKey(headNum, headHash), syntheticBlockHeader(1700000000))
 	mustSet(t, db, canonicalKey(0), genesis[:])
 	mustSet(t, db, append([]byte("ethereum-config-"), genesis[:]...),
 		[]byte(`{"chainId": 1, "homesteadBlock": 1150000}`))
@@ -65,6 +67,9 @@ func TestInspectSyntheticPebble(t *testing.T) {
 	if got.StateScheme != "path" {
 		t.Errorf("StateScheme = %q, want path", got.StateScheme)
 	}
+	if got.HeadTimestamp != 1700000000 {
+		t.Errorf("HeadTimestamp = %d, want 1700000000", got.HeadTimestamp)
+	}
 }
 
 // TestInspectHBSS confirms the state-scheme detector reports "hash" when
@@ -86,6 +91,7 @@ func TestInspectHBSS(t *testing.T) {
 	numBytes := make([]byte, 8)
 	binary.BigEndian.PutUint64(numBytes, 100)
 	mustSet(t, db, append([]byte{'H'}, hash[:]...), numBytes)
+	mustSet(t, db, headerKey(100, hash), syntheticBlockHeader(1234567890))
 	mustSet(t, db, canonicalKey(0), genesis[:])
 	mustSet(t, db, append([]byte("ethereum-config-"), genesis[:]...),
 		[]byte(`{"chainId": 11155111}`))
@@ -140,4 +146,51 @@ func canonicalKey(number uint64) []byte {
 	binary.BigEndian.PutUint64(out[1:9], number)
 	out[9] = 'n'
 	return out
+}
+
+// headerKey assembles geth's "h<num-be><hash>" block-header key.
+func headerKey(number uint64, hash [32]byte) []byte {
+	out := make([]byte, 1+8+32)
+	out[0] = 'h'
+	binary.BigEndian.PutUint64(out[1:9], number)
+	copy(out[9:], hash[:])
+	return out
+}
+
+// syntheticBlockHeader builds a minimal RLP block header for tests. The
+// 11 fields preceding Time are emitted as empty strings (one byte each,
+// 0x80); only Time carries a value. This is structurally valid RLP and
+// is sufficient for inspect.go's header reader, which skips fields by
+// length-prefix and only decodes Time at index 11.
+func syntheticBlockHeader(timestamp uint64) []byte {
+	timeBytes := rlpEncodeUint(timestamp)
+	bodyLen := 11 + len(timeBytes)
+	if bodyLen > 55 {
+		panic(fmt.Sprintf("synthetic header body too long: %d", bodyLen))
+	}
+	out := make([]byte, 0, 1+bodyLen)
+	out = append(out, byte(0xc0+bodyLen))
+	for i := 0; i < 11; i++ {
+		out = append(out, 0x80)
+	}
+	return append(out, timeBytes...)
+}
+
+// rlpEncodeUint produces the RLP encoding of a non-negative integer
+// as a length-prefixed big-endian byte string.
+func rlpEncodeUint(v uint64) []byte {
+	if v == 0 {
+		return []byte{0x80}
+	}
+	if v <= 0x7f {
+		return []byte{byte(v)}
+	}
+	var buf [8]byte
+	binary.BigEndian.PutUint64(buf[:], v)
+	start := 0
+	for start < 8 && buf[start] == 0 {
+		start++
+	}
+	body := buf[start:]
+	return append([]byte{byte(0x80 + len(body))}, body...)
 }

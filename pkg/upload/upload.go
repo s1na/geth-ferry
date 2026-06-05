@@ -39,6 +39,14 @@ type Options struct {
 	Role  snapshot.Role
 	Block uint64
 
+	// HeadHash and HeadTimestamp identify the same head Block in
+	// chain-canonical terms. They're populated automatically by the CLI
+	// from datadir.Inspect when --block is auto-detected (or when an
+	// explicit --block matches the chaindata's head). Zero values are
+	// omitted from the manifest.
+	HeadHash      string
+	HeadTimestamp int64
+
 	// ChainID is recorded in the manifest. 0 means "unset" (allowed for now;
 	// will default to mainnet when --chain-id flag plumbing lands).
 	ChainID uint64
@@ -147,7 +155,11 @@ func Run(ctx context.Context, dst backend.Backend, prefix string, opts Options) 
 		ChainID:     opts.ChainID,
 		Role:        opts.Role,
 		StateScheme: stateScheme,
-		Head:        snapshot.Head{Block: opts.Block},
+		Head: snapshot.Head{
+			Block:     opts.Block,
+			Hash:      opts.HeadHash,
+			Timestamp: opts.HeadTimestamp,
+		},
 		CreatedAt:   time.Now().Unix(),
 		CreatedBy:   opts.CreatedBy,
 		Codec:       snapshot.CodecZstd,

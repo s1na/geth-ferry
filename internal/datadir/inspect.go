@@ -30,11 +30,12 @@ import (
 
 // Info summarizes the metadata ferry needs from a datadir.
 type Info struct {
-	HeadBlock   uint64
-	HeadHash    [32]byte
-	GenesisHash [32]byte
-	ChainID     uint64
-	StateScheme string // "path" (PBSS) or "hash" (HBSS)
+	HeadBlock     uint64
+	HeadHash      [32]byte
+	HeadTimestamp uint64 // unix seconds from the head block header
+	GenesisHash   [32]byte
+	ChainID       uint64
+	StateScheme   string // "path" (PBSS) or "hash" (HBSS)
 }
 
 // Inspect reads <datadir>/geth/chaindata and returns its head/chain metadata.
@@ -69,6 +70,12 @@ func Inspect(datadir string) (*Info, error) {
 	}
 	info.HeadBlock = binary.BigEndian.Uint64(nb)
 	closer.Close()
+
+	headTimestamp, err := readHeaderTimestamp(db, info.HeadBlock, info.HeadHash)
+	if err != nil {
+		return nil, fmt.Errorf("read head timestamp: %w", err)
+	}
+	info.HeadTimestamp = headTimestamp
 
 	genesisHash, chainID, err := readChainConfig(db)
 	if err != nil {
