@@ -9,7 +9,7 @@ the longer story behind the choices.
 A geth datadir is a few hundred gigabytes to a few terabytes of state.
 Moving one between hosts the manual way is `tar | zstd | s3cmd` driven
 from `tmux`, with no manifest, no per-stream checksum, and no fail-fast
-on partial writes. Ferry replaces that runbook with a single binary that:
+on partial writes. Ferry replaces that workflow with a single binary that:
 
 - splits the datadir into a small, named set of parts,
 - streams each part through `tar → zstd → S3 multipart` while accumulating
@@ -22,7 +22,7 @@ on partial writes. Ferry replaces that runbook with a single binary that:
 Out of scope by design: hot snapshots from a running node, incremental /
 diff snapshots, splitting tarballs into sub-table parts, writing the
 legacy HBSS-era format, and resuming an interrupted upload (re-run starts
-the failed part over — operators still run inside `tmux`/`screen` like
+the failed part over; operators still run inside `tmux`/`screen` like
 they did before).
 
 ## Snapshot layout
@@ -32,13 +32,13 @@ A snapshot is a directory at a known prefix on the remote:
 ```
 s3://bucket/snapshots/<name>/
   manifest.json
-  parts/chaindata-live.tar.zst    # always — live pebble (SSTs, MANIFEST, WAL)
+  parts/chaindata-live.tar.zst    # always: live pebble (SSTs, MANIFEST, WAL)
   parts/chaindata-live.toc.zst    # ← per-part TOC sidecar
-  parts/ancient-chain.tar.zst     # always — chain freezer
+  parts/ancient-chain.tar.zst     # always: chain freezer
   parts/ancient-chain.toc.zst
-  parts/ancient-state.tar.zst     # PBSS only — state freezer
+  parts/ancient-state.tar.zst     # PBSS only: state freezer
   parts/ancient-state.toc.zst
-  parts/triedb.tar.zst            # PBSS only — merkle.journal
+  parts/triedb.tar.zst            # PBSS only: merkle.journal
   parts/triedb.toc.zst
 ```
 
@@ -53,22 +53,22 @@ interrupted; downloader treats the prefix as not-a-snapshot.
 
 ### What goes into each part
 
-- **`chaindata-live.tar.zst`** — the live pebble database (`tar -C
+- **`chaindata-live.tar.zst`**: the live pebble database (`tar -C
   <datadir>/geth -cf - chaindata`, but with `chaindata/ancient/`
   excluded). This is the SST set, MANIFEST/CURRENT/OPTIONS bookkeeping,
-  and the WAL `.log` files — the bytes geth's KV-store layer touches
-  every block.
+  and the WAL `.log` files. These are the bytes geth's KV-store layer
+  touches every block.
 
-- **`ancient-chain.tar.zst`** — `chaindata/ancient/chain/`: the chain
+- **`ancient-chain.tar.zst`** (`chaindata/ancient/chain/`): the chain
   freezer (headers, bodies, receipts, hashes, optional era1 files).
   Always present.
 
-- **`ancient-state.tar.zst`** — `chaindata/ancient/state/`: the PBSS
+- **`ancient-state.tar.zst`** (`chaindata/ancient/state/`): the PBSS
   state freezer (`account.data`, `account.index`, `storage.data`,
   `storage.index`, `history.meta`). Present on PBSS nodes; missing
   on HBSS.
 
-- **`triedb.tar.zst`** — `<datadir>/geth/triedb/`: the PBSS journal
+- **`triedb.tar.zst`** (`<datadir>/geth/triedb/`): the PBSS journal
   (`merkle.journal`). Without it geth rewinds to the last flushed
   state on restart, so it has to travel with the snapshot.
 
@@ -90,10 +90,10 @@ Ferry auto-generates names in the canonical shape:
 geth-<chainid>-<role>-<block>
 ```
 
-- `geth` — fixed prefix marking the producing client.
-- `chainid` — EVM chain ID (`1` mainnet, `11155111` sepolia).
-- `role` — `archive` or `full`. That's the whole taxonomy.
-- `block` — head block number at the moment geth was stopped.
+- `geth`: fixed prefix marking the producing client.
+- `chainid`: EVM chain ID (`1` mainnet, `11155111` sepolia).
+- `role`: `archive` or `full`. That's the whole taxonomy.
+- `block`: head block number at the moment geth was stopped.
 
 Example: `geth-1-archive-23456789`.
 
@@ -101,21 +101,21 @@ Example: `geth-1-archive-23456789`.
 path-safe string (letters, digits, `-`, `.`, `_`); the only enforced
 constraints are non-empty, no slashes, no URL metacharacters, no
 whitespace. Useful when your downstream tooling (Ansible, CI artifacts)
-has its own naming convention — pass `--name benchmarker-v2-15M` and
+has its own naming convention. Pass `--name benchmarker-v2-15M` and
 ferry will accept it.
 
 The manifest is the source of truth for chain/role/block/created_at.
 `ferry list` fetches each snapshot's manifest to populate its columns,
 so custom names render correctly regardless of shape.
 
-Creation time isn't in the name — it lives in `manifest.created_at`
+Creation time isn't in the name; it lives in `manifest.created_at`
 (Unix seconds). Earlier releases (≤ v0.1.0) appended a `-<unix-seconds>`
 tail for collision avoidance; that role is now filled by upload's
 "snapshot already exists" check, which refuses to overwrite an existing
 name unless `--overwrite` is passed. v0.2.0+ neither generates nor
 parses the legacy 5-part form. Snapshots that still carry the legacy
 tail on disk are reachable by URL just fine (download/inspect/verify
-treat names as opaque path segments) — only `ParseName` rejects them,
+treat names as opaque path segments). Only `ParseName` rejects them,
 and ferry doesn't call ParseName on the read path anyway (list fetches
 the manifest).
 
@@ -130,7 +130,7 @@ SSTs and zstd-compressed `.cdat` freezer segments, so the ratio
 difference between zstd levels 3 and 9 on this data is consistently
 under 2 %. We sit at the top of `klauspost/compress`'s `SpeedDefault`
 band (zstd 3–5), which is the highest level that streams in parallel
-across cores — anything ≥ 10 (`SpeedBestCompression`) is forced
+across cores. Anything ≥ 10 (`SpeedBestCompression`) is forced
 single-threaded by the library and runs ~10× slower. Level is
 configurable via `--level`, but going above 5 is rarely worth it.
 
@@ -163,7 +163,7 @@ configurable via `--level`, but going above 5 is rarely worth it.
 }
 ```
 
-`state_scheme` is descriptive only — ferry doesn't change behavior based
+`state_scheme` is descriptive only: ferry doesn't change behavior based
 on it. It's there so a downloader can sanity-check before pulling 2 TB.
 
 ### Legacy compatibility
@@ -199,14 +199,14 @@ Dispatched by URL scheme:
 - `s3://bucket/prefix/...` → S3 (AWS SDK v2, endpoint-overridable for
   OVH and other S3-compatible providers).
 - `file:///abs/path` → local filesystem (tests, staging).
-- Future: `gcs://`, `https://`, etc. — register against
+- Future: `gcs://`, `https://`, etc. Register against
   `backend.Register("scheme", opener)`.
 
 S3 `Put` drives multipart upload itself rather than using the SDK's
 `manager.Uploader`. The SDK ≥ v1.30 wraps `UploadPart` bodies in
 `aws-chunked` encoding with a CRC32 trailer, which OVH rejects with
 `IncompleteBody`. The hand-rolled writer sends plain part bodies with an
-explicit `Content-Length` and an inline `Crc32` header — works against
+explicit `Content-Length` and an inline `Crc32` header; works against
 both native AWS S3 and the S3-compatible providers we care about.
 
 Non-secret config goes on the URL query string:
@@ -240,12 +240,12 @@ github.com/s1na/geth-ferry
 - Refuse to upload if `<datadir>/geth/LOCK` or `<datadir>/geth/geth.ipc`
   exists. Override with `--force`.
 - Refuse to download into a non-empty `<datadir>/geth/`. Override with
-  `--force` — semantically *replace* (not merge): a successful run
+  `--force`. Semantically *replace* (not merge): a successful run
   atomically swaps a freshly-extracted tree into place; a failed run
   leaves the original untouched.
 - Tar extraction rejects entries that would escape the destination
   (`..`-relative paths, absolute symlinks). Device files, fifos, and
-  hard links are silently skipped — geth doesn't need them.
+  hard links are silently skipped; geth doesn't need them.
 - Ctrl+C (SIGINT/SIGTERM) cancels the root context. Backends propagate:
   in-flight S3 multipart uploads are `AbortMultipartUpload`'d with a
   fresh background context (so the abort RPC reaches the server even
@@ -257,7 +257,7 @@ github.com/s1na/geth-ferry
 **Upload.** Each part is a single multipart upload. The writer hands the
 caller two terminators: `Close` commits (`CompleteMultipartUpload`) and
 `Abort` discards (`AbortMultipartUpload`). The upload code defers
-`Abort` and only sets a `committed` flag after `Close` returns nil — so
+`Abort` and only sets a `committed` flag after `Close` returns nil. So
 any mid-stream failure (tar walk, zstd encode, network) leaves no
 committed object on the bucket. The manifest is written last; its
 absence is the integrity signal.
@@ -291,11 +291,11 @@ into another's namespace, so concurrent extraction is race-free.
 
 ## Dependencies
 
-- `github.com/aws/aws-sdk-go-v2` — S3 client + endpoint override.
-- `github.com/klauspost/compress/zstd` — pure-Go, multithreaded.
-- `github.com/pierrec/lz4/v4` — pure-Go, decode only.
-- `github.com/cockroachdb/pebble` — read-only datadir inspection.
-- `github.com/spf13/cobra` — CLI.
+- `github.com/aws/aws-sdk-go-v2`: S3 client + endpoint override.
+- `github.com/klauspost/compress/zstd`: pure-Go, multithreaded.
+- `github.com/pierrec/lz4/v4`: pure-Go, decode only.
+- `github.com/cockroachdb/pebble`: read-only datadir inspection.
+- `github.com/spf13/cobra`: CLI.
 - stdlib `archive/tar`, `crypto/sha256`, `encoding/json`.
 
 No CGO.
