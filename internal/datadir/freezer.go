@@ -7,15 +7,17 @@ import (
 )
 
 // chainFreezerTail returns the lowest block number still present in the
-// chain freezer. After geth's prune-history runs, this advances past
-// the genesis; on an unpruned datadir it's 0.
+// chain freezer's blockdata group (bodies + receipts). After geth's
+// prune-history runs, this advances past genesis; on an unpruned datadir
+// it's 0.
 //
-// We read it from <datadir>/geth/chaindata/ancient/chain/headers.meta:
-// headers is the always-present table in the chain freezer (bodies and
-// receipts can be pruned, headers can't), and all tables in a freezer
-// group share the same virtualTail after a prune.
+// We read it from <datadir>/geth/chaindata/ancient/chain/bodies.meta.
+// This matches geth's HistoryPruningCutoff() which queries the freezer's
+// ChainFreezerBlockDataGroup tail. headers.meta intentionally keeps
+// tail=0 even after prune-history because headers are never pruned, so
+// using it as the cutoff would silently understate the prune point.
 func chainFreezerTail(datadir string) (uint64, error) {
-	metaPath := datadir + "/geth/chaindata/ancient/chain/headers.meta"
+	metaPath := datadir + "/geth/chaindata/ancient/chain/bodies.meta"
 	return readFreezerMetaTail(metaPath)
 }
 

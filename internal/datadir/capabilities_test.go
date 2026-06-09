@@ -38,7 +38,7 @@ func TestCapabilitiesBasic(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(
-		filepath.Join(chainFreezerDir, "headers.meta"),
+		filepath.Join(chainFreezerDir, "bodies.meta"),
 		syntheticFreezerMetaV2(15537393, 0),
 		0o644,
 	); err != nil {
@@ -131,7 +131,7 @@ func TestCapabilitiesTxTailDominates(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(
-		filepath.Join(chainFreezerDir, "headers.meta"),
+		filepath.Join(chainFreezerDir, "bodies.meta"),
 		syntheticFreezerMetaV2(15537393, 0),
 		0o644,
 	); err != nil {
