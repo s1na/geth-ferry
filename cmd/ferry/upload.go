@@ -101,7 +101,7 @@ func uploadCmd() *cobra.Command {
 				// the freezer .meta or txIndexTail leaves caps==nil and
 				// the manifest's capabilities field is omitted, which is
 				// strictly better than emitting a half-populated one.
-				if c, cerr := datadir.Capabilities(src, info); cerr == nil {
+				if c, cerr := datadir.Capabilities(src, info, snapshot.Role(role), os.Stderr); cerr == nil {
 					caps = c
 				} else {
 					fmt.Fprintf(os.Stderr, "warning: capabilities derivation failed: %v (omitting from manifest)\n", cerr)

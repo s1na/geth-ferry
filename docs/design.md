@@ -239,11 +239,22 @@ Field semantics (matching the spec):
 - `logs`: intentionally not produced by ferry. Log-index rendering
   state lags head asynchronously and tracking it accurately is its
   own follow-up; consumers should treat the absence as "unknown".
-- `state`, `stateproofs`: not yet derived. The state freezer is
-  indexed by state ID rather than block number, so reporting these
-  needs a state-ID-to-block mapping pass and is deferred to a
-  follow-up. When present they'll be added without bumping the
-  manifest version.
+- `state`, `stateproofs`: derived from the operator-declared role and
+  the on-disk state scheme:
+   - Any full node (PBSS or HBSS): `head + 1 − 128`, mirroring geth's
+     `TriesInMemory` in-memory diff layer window. The 90k reverse-diffs
+     PBSS keeps in `ancient/state/` are *not* queryable on a full node;
+     they exist for reorg recovery only. They become user-serveable
+     only when an archive-mode acceleration index is built on top.
+   - HBSS archive: 0. Every block's state is materialized.
+   - PBSS archive: not yet derived; field omitted. The acceleration
+     index's coverage lives at the pebble `LastStateHistoryIndex` key
+     (blob of fixed-size `indexBlockDesc` entries) and parsing it is
+     a separate follow-up. A nil field reads as "unknown" by spec.
+  Validation: on PBSS we read `LastStateID` (disk-layer state ID); if
+  it's wildly behind head (> 10k blocks), ferry logs a warning that
+  the 128-block window may not be fully restorable. On HBSS we check
+  for `SnapshotRoot` presence as the equivalent sanity signal.
 
 Numbers are hex strings (`"0x..."`) to match `eth_capabilities` wire
 format. Where a resource cannot be derived, ferry omits the field;

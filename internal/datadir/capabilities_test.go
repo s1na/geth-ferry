@@ -15,7 +15,7 @@ import (
 func TestCapabilitiesBasic(t *testing.T) {
 	tmp := t.TempDir()
 
-	// Pebble db: TransactionIndexTail key only — the rest of the keys
+	// Pebble db: TransactionIndexTail key only; the rest of the keys
 	// readTxIndexTail doesn't touch are absent and that's fine.
 	chaindata := filepath.Join(tmp, "geth", "chaindata")
 	if err := os.MkdirAll(chaindata, 0o755); err != nil {
@@ -46,10 +46,11 @@ func TestCapabilitiesBasic(t *testing.T) {
 	}
 
 	info := &Info{
-		HeadBlock: 20000361,
-		HeadHash:  [32]byte{0xab, 0xcd},
+		HeadBlock:   20000361,
+		HeadHash:    [32]byte{0xab, 0xcd},
+		StateScheme: "path",
 	}
-	caps, err := Capabilities(tmp, info)
+	caps, err := Capabilities(tmp, info, "full", nil)
 	if err != nil {
 		t.Fatalf("Capabilities: %v", err)
 	}
@@ -72,8 +73,68 @@ func TestCapabilitiesBasic(t *testing.T) {
 		t.Errorf("Tx.OldestBlock = %v, want 0xed14f1 (clamped to cutoff)", caps.Tx)
 	}
 
+	// PBSS full: state = head + 1 - 128 = 20000234 = 0x1312dea.
+	if caps.State == nil || caps.State.OldestBlock != "0x1312dea" {
+		t.Errorf("State.OldestBlock = %v, want 0x1312dea", caps.State)
+	}
+	if caps.StateProofs == nil || caps.StateProofs.OldestBlock != "0x1312dea" {
+		t.Errorf("StateProofs.OldestBlock = %v, want 0x1312dea", caps.StateProofs)
+	}
+}
+
+// TestCapabilitiesHBSSArchive: hash-scheme + archive role → state covers
+// from block 0 (every state materialized).
+func TestCapabilitiesHBSSArchive(t *testing.T) {
+	tmp := t.TempDir()
+	chaindata := filepath.Join(tmp, "geth", "chaindata")
+	if err := os.MkdirAll(chaindata, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	db, err := pebble.Open(chaindata, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	info := &Info{HeadBlock: 1000, StateScheme: "hash"}
+	caps, err := Capabilities(tmp, info, "archive", nil)
+	if err != nil {
+		t.Fatalf("Capabilities: %v", err)
+	}
+	if caps.State == nil || caps.State.OldestBlock != "0x0" {
+		t.Errorf("HBSS archive State.OldestBlock = %v, want 0x0", caps.State)
+	}
+	if caps.StateProofs == nil || caps.StateProofs.OldestBlock != "0x0" {
+		t.Errorf("HBSS archive StateProofs.OldestBlock = %v, want 0x0", caps.StateProofs)
+	}
+}
+
+// TestCapabilitiesPBSSArchiveOmits: path-scheme + archive role → state
+// and stateproofs are nil pending follow-up (we don't yet parse the
+// acceleration index blob).
+func TestCapabilitiesPBSSArchiveOmits(t *testing.T) {
+	tmp := t.TempDir()
+	chaindata := filepath.Join(tmp, "geth", "chaindata")
+	if err := os.MkdirAll(chaindata, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	db, err := pebble.Open(chaindata, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	info := &Info{HeadBlock: 1000, StateScheme: "path"}
+	caps, err := Capabilities(tmp, info, "archive", nil)
+	if err != nil {
+		t.Fatalf("Capabilities: %v", err)
+	}
 	if caps.State != nil || caps.StateProofs != nil {
-		t.Errorf("State/StateProofs should be nil until follow-up: state=%v proofs=%v",
+		t.Errorf("PBSS archive should omit state/stateproofs until index parsing lands; got state=%v proofs=%v",
 			caps.State, caps.StateProofs)
 	}
 }
@@ -95,7 +156,7 @@ func TestCapabilitiesUnpruned(t *testing.T) {
 	}
 
 	info := &Info{HeadBlock: 100, HeadHash: [32]byte{0x11}}
-	caps, err := Capabilities(tmp, info)
+	caps, err := Capabilities(tmp, info, "full", nil)
 	if err != nil {
 		t.Fatalf("Capabilities: %v", err)
 	}
@@ -139,7 +200,7 @@ func TestCapabilitiesTxTailDominates(t *testing.T) {
 	}
 
 	info := &Info{HeadBlock: 20000000, HeadHash: [32]byte{}}
-	caps, err := Capabilities(tmp, info)
+	caps, err := Capabilities(tmp, info, "full", nil)
 	if err != nil {
 		t.Fatalf("Capabilities: %v", err)
 	}
