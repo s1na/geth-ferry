@@ -35,17 +35,58 @@ const (
 )
 
 type Manifest struct {
-	Version     int         `json:"version"`
-	Name        string      `json:"name"`
-	ChainID     uint64      `json:"chain_id"`
-	Role        Role        `json:"role"`
-	StateScheme StateScheme `json:"state_scheme"`
-	Head        Head        `json:"head"`
-	CreatedAt   int64       `json:"created_at"` // Unix seconds (UTC)
-	CreatedBy   string      `json:"created_by"`
-	Codec       Codec       `json:"codec"`
-	Level       int         `json:"level"`
-	Parts       []Part      `json:"parts"`
+	Version      int           `json:"version"`
+	Name         string        `json:"name"`
+	ChainID      uint64        `json:"chain_id"`
+	Role         Role          `json:"role"`
+	StateScheme  StateScheme   `json:"state_scheme"`
+	Head         Head          `json:"head"`
+	CreatedAt    int64         `json:"created_at"` // Unix seconds (UTC)
+	CreatedBy    string        `json:"created_by"`
+	Codec        Codec         `json:"codec"`
+	Level        int           `json:"level"`
+	Parts        []Part        `json:"parts"`
+	Capabilities *Capabilities `json:"capabilities,omitempty"`
+}
+
+// Capabilities mirrors the eth_capabilities JSON-RPC response defined in
+// https://github.com/ethereum/execution-apis/pull/755. Each resource that
+// ferry can determine for the produced snapshot is populated; unpopulated
+// resources are omitted entirely (a reader should treat absence as "we
+// don't know"). The Logs resource is intentionally not exposed: log-index
+// state is observable per-snapshot but tracking its sliding-window
+// rendering progress in a way that survives reload is more work than the
+// downstream consumer needs right now.
+//
+// All block numbers are encoded as "0x..." hex strings to match the
+// JSON-RPC wire format so a consumer's existing eth_capabilities parser
+// reads ferry manifests without translation.
+type Capabilities struct {
+	Head CapabilityHead `json:"head"`
+
+	// Resource fields, all pointers so unpopulated → JSON omits them.
+	Blocks      *CapabilityResource `json:"blocks,omitempty"`
+	Receipts    *CapabilityResource `json:"receipts,omitempty"`
+	Tx          *CapabilityResource `json:"tx,omitempty"`
+	State       *CapabilityResource `json:"state,omitempty"`       // TODO: derive from state freezer
+	StateProofs *CapabilityResource `json:"stateproofs,omitempty"` // TODO: derive (same matrix as State)
+}
+
+// CapabilityHead is the canonical head this snapshot represents, in the
+// same shape eth_capabilities reports it.
+type CapabilityHead struct {
+	Number string `json:"number"` // "0x..." hex
+	Hash   string `json:"hash"`   // "0x..." hex (32 bytes)
+}
+
+// CapabilityResource describes one resource's availability. A disabled
+// resource omits OldestBlock so it cannot be mistaken for a usable range.
+// DeleteStrategy is intentionally not modelled in ferry: it advertises a
+// retention policy the producing node was running, which is forward-
+// looking intent rather than the static fact captured by the snapshot.
+type CapabilityResource struct {
+	Disabled    bool   `json:"disabled,omitempty"`
+	OldestBlock string `json:"oldestBlock,omitempty"` // "0x..." hex
 }
 
 type Head struct {

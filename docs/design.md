@@ -209,6 +209,50 @@ stream of `<size> <name>\n` lines; `ferry contents` reads only the
 manifest plus these sidecars to list a snapshot's files without
 fetching any of the multi-hundred-GiB parts.
 
+### `capabilities` (optional)
+
+The manifest may carry a `capabilities` object that mirrors the
+`eth_capabilities` JSON-RPC response defined in
+[execution-apis PR #755](https://github.com/ethereum/execution-apis/pull/755)
+and implemented in geth at `internal/ethapi/capabilities.go`. The shape
+is identical so a consumer's existing eth_capabilities parser reads
+ferry manifests without translation:
+
+```json
+"capabilities": {
+  "head": { "number": "0x1312e69", "hash": "0xabcd…" },
+  "blocks":   { "oldestBlock": "0xed14f1" },
+  "receipts": { "oldestBlock": "0xed14f1" },
+  "tx":       { "oldestBlock": "0xed14f1" }
+}
+```
+
+Field semantics (matching the spec):
+
+- `head.number` / `head.hash`: canonical head this snapshot represents.
+  Duplicates the top-level `head.block` / `head.hash` so the
+  `capabilities` block is self-contained.
+- `blocks`, `receipts`, `tx`: each resource carries an `oldestBlock`
+  (hex-encoded uint64) marking the lowest block number the snapshot
+  retains for that resource. Per the spec, `disabled: true` instead
+  signals the resource is not stored at all.
+- `logs`: intentionally not produced by ferry. Log-index rendering
+  state lags head asynchronously and tracking it accurately is its
+  own follow-up; consumers should treat the absence as "unknown".
+- `state`, `stateproofs`: not yet derived. The state freezer is
+  indexed by state ID rather than block number, so reporting these
+  needs a state-ID-to-block mapping pass and is deferred to a
+  follow-up. When present they'll be added without bumping the
+  manifest version.
+
+Numbers are hex strings (`"0x..."`) to match `eth_capabilities` wire
+format. Where a resource cannot be derived, ferry omits the field;
+readers MUST treat field absence as "unknown" rather than zero or
+disabled. The `deleteStrategy` sub-object the RPC method may emit
+(advertising future retention policy) is not modelled in ferry: the
+manifest captures static facts about a frozen snapshot, not the
+forward-looking intent of the producing node.
+
 ### Legacy compatibility
 
 Legacy snapshots are single-file monoliths named like

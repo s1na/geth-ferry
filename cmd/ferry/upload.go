@@ -92,9 +92,20 @@ func uploadCmd() *cobra.Command {
 			// and the user didn't override --block to point elsewhere.
 			var headHash string
 			var headTimestamp int64
+			var caps *snapshot.Capabilities
 			if info.HeadBlock != 0 && info.HeadBlock == block {
 				headHash = hex.EncodeToString(info.HeadHash[:])
 				headTimestamp = int64(info.HeadTimestamp)
+
+				// Capabilities derivation is best-effort: failure to read
+				// the freezer .meta or txIndexTail leaves caps==nil and
+				// the manifest's capabilities field is omitted, which is
+				// strictly better than emitting a half-populated one.
+				if c, cerr := datadir.Capabilities(src, info); cerr == nil {
+					caps = c
+				} else {
+					fmt.Fprintf(os.Stderr, "warning: capabilities derivation failed: %v (omitting from manifest)\n", cerr)
+				}
 			}
 
 			m, st, err := upload.Run(ctx, be, prefix, upload.Options{
@@ -104,6 +115,7 @@ func uploadCmd() *cobra.Command {
 				Block:         block,
 				HeadHash:      headHash,
 				HeadTimestamp: headTimestamp,
+				Capabilities:  caps,
 				ChainID:       chainID,
 				StateScheme:   snapshot.StateScheme(info.StateScheme),
 				Level:         level,

@@ -47,6 +47,12 @@ type Options struct {
 	HeadHash      string
 	HeadTimestamp int64
 
+	// Capabilities, when non-nil, is recorded verbatim under the
+	// manifest's "capabilities" key. The CLI builds this from the
+	// datadir alongside Inspect; tests and library callers can leave
+	// it nil to skip the field entirely.
+	Capabilities *snapshot.Capabilities
+
 	// ChainID is recorded in the manifest. 0 means "unset" (allowed for now;
 	// will default to mainnet when --chain-id flag plumbing lands).
 	ChainID uint64
@@ -160,6 +166,7 @@ func Run(ctx context.Context, dst backend.Backend, prefix string, opts Options) 
 			Hash:      opts.HeadHash,
 			Timestamp: opts.HeadTimestamp,
 		},
+		Capabilities: opts.Capabilities,
 		CreatedAt:   time.Now().Unix(),
 		CreatedBy:   opts.CreatedBy,
 		Codec:       snapshot.CodecZstd,
