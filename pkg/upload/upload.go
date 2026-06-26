@@ -167,10 +167,10 @@ func Run(ctx context.Context, dst backend.Backend, prefix string, opts Options) 
 			Timestamp: opts.HeadTimestamp,
 		},
 		Capabilities: opts.Capabilities,
-		CreatedAt:   time.Now().Unix(),
-		CreatedBy:   opts.CreatedBy,
-		Codec:       snapshot.CodecZstd,
-		Level:       opts.Level,
+		CreatedAt:    time.Now().Unix(),
+		CreatedBy:    opts.CreatedBy,
+		Codec:        snapshot.CodecZstd,
+		Level:        opts.Level,
 	}
 
 	if err := validateAncientLayout(filepath.Join(gethDir, "chaindata", "ancient")); err != nil {
