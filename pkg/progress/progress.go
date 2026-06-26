@@ -18,12 +18,12 @@ import (
 // When Total is non-zero, the periodic line additionally renders a
 // percentage and an ETA based on the running average rate. Total should
 // be the expected end value of bytes that will pass through this
-// Tracker — for ferry that's the uncompressed source size of the part.
+// Tracker. For ferry that's the uncompressed source size of the part.
 type Tracker struct {
 	Label    string
 	Out      io.Writer     // defaults to os.Stderr
 	Interval time.Duration // defaults to 2s
-	Total    int64         // optional — expected end value; enables % + ETA
+	Total    int64         // optional: expected end value; enables % + ETA
 
 	started time.Time
 	n       atomic.Int64
@@ -96,7 +96,7 @@ func (t *Tracker) report(suffix string) {
 	}
 	tag := ""
 	if suffix != "" {
-		tag = " — " + suffix
+		tag = " " + suffix
 	}
 	// Optional progress-towards-total block: "/ 2.18 TiB (5.7%) ETA 3h41m".
 	var progressTag string
@@ -105,7 +105,7 @@ func (t *Tracker) report(suffix string) {
 		if pct > 100 {
 			pct = 100
 		}
-		eta := "—"
+		eta := "-"
 		switch {
 		case n >= t.Total:
 			eta = "0s"

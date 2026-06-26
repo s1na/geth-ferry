@@ -82,7 +82,7 @@ func printDownloadSummary(out io.Writer, m *snapshot.Manifest, st *download.Stat
 		totalCompressed += p.CompressedSize
 		totalUncompressed += p.UncompressedSize
 	}
-	fmt.Fprintf(out, "downloaded %s — %d part(s), %s → %s in %s (%s)\n",
+	fmt.Fprintf(out, "downloaded %s: %d part(s), %s → %s in %s (%s)\n",
 		m.Name, len(m.Parts),
 		progress.HumanBytes(totalCompressed),
 		progress.HumanBytes(totalUncompressed),

@@ -1,6 +1,6 @@
 // Package datadir reads metadata from a stopped geth datadir without
 // invoking geth. ferry uses it to populate the snapshot manifest's
-// chain-id, head-block, and state-scheme fields automatically — turning
+// chain-id, head-block, and state-scheme fields automatically, turning
 // `--name` / `--block` / `--chain-id` from required flags into optional
 // overrides.
 //
@@ -96,17 +96,17 @@ func Inspect(datadir string) (*Info, error) {
 // readStateScheme determines whether the chaindata holds PBSS (path) or
 // HBSS (hash) state. Mirrors go-ethereum's rawdb.ReadStateScheme:
 //
-//  1. Probe for the account trie root in path scheme — key "A" (single
+//  1. Probe for the account trie root in path scheme: key "A" (single
 //     byte; rawdb.TrieNodeAccountPrefix with empty path). Present on
 //     any populated PBSS chain.
-//  2. Probe for "LastStateID" — persistent state id, set by pathdb even
+//  2. Probe for "LastStateID": persistent state id, set by pathdb even
 //     when the root was wiped during snap-sync.
 //  3. Fall back to "hash". (A pre-v0.2.1 ferry stat'd <datadir>/geth/triedb/
 //     which only exists after a graceful PBSS shutdown writes
-//     merkle.journal — false-negatives mis-tagged actual PBSS nodes as
+//     merkle.journal, false-negatives mis-tagged actual PBSS nodes as
 //     HBSS, exactly the bug this replaces.)
 //
-// This is purely descriptive — ferry doesn't change behavior based on
+// This is purely descriptive: ferry doesn't change behavior based on
 // the value, it just records it in the manifest so downloaders can
 // sanity-check before pulling a multi-TB snapshot.
 func readStateScheme(db *pebble.DB) (string, error) {
@@ -153,7 +153,7 @@ func readChainConfig(db *pebble.DB) ([32]byte, uint64, error) {
 	var genesis [32]byte
 
 	// Genesis hash = canonical hash of block 0. Read it directly via the
-	// canonical-chain key rather than iterating the chain-config namespace —
+	// canonical-chain key rather than iterating the chain-config namespace;
 	// this asserts we pick up the chain we've actually been syncing rather
 	// than whichever ethereum-config-* key happens to sort first.
 	//
@@ -177,7 +177,7 @@ func readChainConfig(db *pebble.DB) ([32]byte, uint64, error) {
 	defer closer.Close()
 
 	// We only need chainId. Geth's ChainConfig has many fields and they
-	// shift across releases — decoding into a tiny shim avoids brittleness.
+	// shift across releases; decoding into a tiny shim avoids brittleness.
 	var cfg struct {
 		ChainID *uint64 `json:"chainId"`
 	}

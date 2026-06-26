@@ -26,7 +26,7 @@ func TestLegacyLz4RoundTrip(t *testing.T) {
 }
 
 // TestLegacyFlatTar covers the older benchmarker format where tar entries
-// are NOT prefixed with "chaindata/" — they're flat (e.g. "000016.sst",
+// are NOT prefixed with "chaindata/": they're flat (e.g. "000016.sst",
 // "ancient/chain/..."). Ferry must rebase those into <datadir>/geth/chaindata/.
 func TestLegacyFlatTar(t *testing.T) {
 	testLegacyRoundTrip(t, "chaindata-5000000.tar.lz4", lz4Encode, "")
@@ -57,8 +57,8 @@ func TestLegacyUnknownExtension(t *testing.T) {
 // testLegacyRoundTrip builds a fake legacy single-file snapshot using encode,
 // uploads it via the file:// backend, downloads via legacy.Download, and
 // asserts the extracted tree matches what was tarred. tarPrefix is the path
-// prefix to use on every tar entry name — "chaindata/" for the modern
-// runbook format, "" for the older benchmarker format. Either way, the
+// prefix to use on every tar entry name: "chaindata/" for the modern
+// format, "" for the older benchmarker format. Either way, the
 // downloaded files should end up at <dst>/geth/chaindata/...
 func testLegacyRoundTrip(t *testing.T, key string, encode func(io.Writer) io.WriteCloser, tarPrefix string) {
 	t.Helper()

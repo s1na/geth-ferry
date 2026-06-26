@@ -23,7 +23,7 @@ type Object struct {
 }
 
 // Backend is the abstract object store. A Backend instance is bound to a
-// "root" — typically a bucket prefix or a local directory — and all keys
+// "root" (typically a bucket prefix or a local directory) and all keys
 // passed to its methods are interpreted relative to that root.
 type Backend interface {
 	// List returns objects whose keys begin with the given relative prefix.
@@ -40,7 +40,7 @@ type Backend interface {
 
 	// Put returns a streaming Writer that uploads bytes to the given key.
 	// The caller must terminate the writer by calling either Close
-	// (commit) or Abort (discard) — never both, and exactly one. The
+	// (commit) or Abort (discard); never both, and exactly one. The
 	// object is not visible to readers until Close returns nil.
 	// Implementations may use multipart upload internally.
 	Put(ctx context.Context, key string) (Writer, error)
@@ -55,7 +55,7 @@ type Backend interface {
 //   - Close commits the object. After a successful Close, the object is
 //     visible to subsequent Get/Stat calls.
 //   - Abort discards any buffered or in-flight bytes; no object becomes
-//     visible. Abort is best-effort and does not return an error — the
+//     visible. Abort is best-effort and does not return an error; the
 //     caller is already on an error path.
 //
 // Calling Close after Abort, or vice versa, is a no-op. Calling Write

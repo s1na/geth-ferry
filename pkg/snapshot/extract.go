@@ -32,7 +32,7 @@ func Untar(r io.Reader, dst string) error {
 }
 
 // EnsureEmpty refuses to proceed if dir exists and is non-empty unless force
-// is set. A missing dir is fine — the caller will create it. Used as the
+// is set. A missing dir is fine; the caller will create it. Used as the
 // pre-extract guard for both manifest-based and legacy downloads.
 func EnsureEmpty(dir string, force bool) error {
 	if force {

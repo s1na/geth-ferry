@@ -84,8 +84,8 @@ func Download(ctx context.Context, src backend.Backend, key string, opts Options
 	defer dec.Close()
 
 	// Legacy snapshots come in two shapes:
-	//   1. tar entries rooted at "chaindata/..." — produced by the runbook
-	//      (`tar -C /datadrive/geth/geth -cf - chaindata`). These extract
+	//   1. tar entries rooted at "chaindata/...", produced by
+	//      `tar -C <datadir>/geth -cf - chaindata`. These extract
 	//      cleanly into <datadir>/geth/.
 	//   2. tar entries flat (e.g. "000016.sst", "ancient/chain/..."), as in
 	//      the older `chaindata-<block>.tar.lz4` benchmarker snapshots,

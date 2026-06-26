@@ -99,10 +99,10 @@ func TestValidateNamePathSafety(t *testing.T) {
 		// Canonical shape.
 		"geth-1-archive-23456789",
 		"geth-11155111-full-100",
-		// Path-safety doesn't care about the canonical-name regex —
+		// Path-safety doesn't care about the canonical-name regex;
 		// a legacy 5-part name is still a valid path segment.
 		"geth-1-full-15000035-1778899789",
-		// Free-form, path-safe — should now be accepted.
+		// Free-form, path-safe: should now be accepted.
 		"my-snapshot",
 		"benchmarker-v2",
 		"test_run_42",
@@ -138,7 +138,7 @@ func TestIsLegacyURL(t *testing.T) {
 		"/path/to/snapshot.tar.zst": true,
 		"snapshot.tar":              false,
 		"snapshot.tar.gz":           false,
-		// real-world URLs with query parameters — these used to fail
+		// real-world URLs with query parameters: these used to fail
 		"s3://bucket/benchmarkers/chaindata-5000000.tar.lz4?endpoint=s3.de.io.cloud.ovh.net&region=de": true,
 		"s3://bucket/snapshots/archive-1.tar.zst?region=de":                                            true,
 		// snapshot directory shape (no .tar.* suffix)

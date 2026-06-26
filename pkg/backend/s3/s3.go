@@ -38,7 +38,7 @@ import (
 
 // DefaultMultipartPartSize is the per-part size used when the caller
 // doesn't tune it. With the S3 limit of 10 000 parts, 256 MiB caps a
-// single object at ~2.5 TiB — enough for the chaindata tarball with
+// single object at ~2.5 TiB: enough for the chaindata tarball with
 // headroom.
 const DefaultMultipartPartSize = 256 * 1024 * 1024
 
@@ -132,7 +132,7 @@ func (o ClientOptions) serviceOptions() []func(*s3.Options) {
 			// integrity protections wrap UploadPart bodies in aws-chunked
 			// encoding with a CRC32 trailer, which OVH rejects with
 			// "IncompleteBody"). Our manual Put writes plain bodies with
-			// an explicit CRC32 *header* — but ResponseChecksumValidation
+			// an explicit CRC32 *header*, but ResponseChecksumValidation
 			// would still try to validate response trailers we don't set.
 			s.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
 			s.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
@@ -142,7 +142,7 @@ func (o ClientOptions) serviceOptions() []func(*s3.Options) {
 
 // FromURL parses an s3:// URL into a configured Backend. It returns the
 // Backend along with the in-backend prefix that the registry should hand
-// callers — for S3 this is empty because the prefix is already baked into
+// callers; for S3 this is empty because the prefix is already baked into
 // the Backend struct. tune carries optional non-URL tunables (multipart
 // part size / concurrency); pass nil to use defaults.
 func FromURL(ctx context.Context, u *url.URL, tune *backend.OpenConfig) (*Backend, string, error) {
@@ -285,7 +285,7 @@ func (b *Backend) Get(ctx context.Context, key string) (io.ReadCloser, error) {
 // Put returns a streaming writer backed by an S3 multipart upload that we
 // drive ourselves (no manager.Uploader). Each part is sent as a fixed-size
 // byte buffer with an explicit ContentLength and an inline Crc32 header;
-// no aws-chunked encoding, no trailers — keeps OVH and other strict S3
+// no aws-chunked encoding, no trailers: keeps OVH and other strict S3
 // implementations happy.
 //
 // The returned Writer must be terminated by Close (commit) or Abort
@@ -352,12 +352,12 @@ func isNotFound(err error) bool {
 // bytes and dispatching each filled buffer as an UploadPart in a worker
 // goroutine. Up to concurrency parts are in flight at once. Part buffers
 // are checked out from the parent Backend's sync.Pool on dispatch and
-// returned when the corresponding UploadPart completes — steady-state
+// returned when the corresponding UploadPart completes; steady-state
 // allocation is therefore concurrency × partSize regardless of how many
 // parts the object turns into.
 //
-// Termination is via either Close (commit — CompleteMultipartUpload) or
-// Abort (discard — AbortMultipartUpload, using a fresh context so it
+// Termination is via either Close (commit: CompleteMultipartUpload) or
+// Abort (discard: AbortMultipartUpload, using a fresh context so it
 // completes even when the caller's context is cancelled). Calling one
 // disables the other; calling neither leaks an in-progress upload on the
 // bucket.

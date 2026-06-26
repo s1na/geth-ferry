@@ -11,8 +11,8 @@ import (
 //
 // Level 5 is a deliberate choice. klauspost/compress's zstd encoder runs
 // streaming compression on a single goroutine for any level mapping to
-// EncoderLevelBestCompression (anything ≥ 10 in the SDK's zstd-level scale)
-// — which means default 13 caps real-world upload throughput at ~6 MiB/s
+// EncoderLevelBestCompression (anything ≥ 10 in the SDK's zstd-level scale),
+// which means default 13 caps real-world upload throughput at ~6 MiB/s
 // regardless of GOMAXPROCS. Levels ≤ 5 sit in SpeedDefault, which the
 // encoder will pipeline across cores. The compression-ratio difference on
 // a real geth datadir (mostly snappy-compressed pebble SSTs and zstd-compressed

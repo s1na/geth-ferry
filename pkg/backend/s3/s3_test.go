@@ -45,7 +45,7 @@ func TestNormalizeEndpoint(t *testing.T) {
 }
 
 // TestFromURLValidation covers the URL parsing without making any network
-// calls — config loading is lazy so an invalid endpoint isn't reached
+// calls; config loading is lazy so an invalid endpoint isn't reached
 // until a request is made.
 func TestFromURLValidation(t *testing.T) {
 	t.Setenv("AWS_ACCESS_KEY_ID", "x")

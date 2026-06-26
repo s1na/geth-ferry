@@ -50,7 +50,7 @@ Snapshots produced by older ferry versions (no TOCs) are flagged.`,
 			out := cmd.OutOrStdout()
 			for _, p := range m.Parts {
 				if p.TOC == nil {
-					fmt.Fprintf(out, "# %s — no TOC (snapshot predates ferry's TOC sidecars; rerun upload to add)\n\n", p.Name)
+					fmt.Fprintf(out, "# %s: no TOC (snapshot predates ferry's TOC sidecars; rerun upload to add)\n\n", p.Name)
 					continue
 				}
 				if err := printTOC(ctx, be, prefix, name, p, out); err != nil {
@@ -86,7 +86,7 @@ func printTOC(ctx context.Context, be backend.Backend, prefix, name string, p sn
 	}
 	defer dec.Close()
 
-	fmt.Fprintf(out, "# %s — %d entries\n", p.Name, p.TOC.Entries)
+	fmt.Fprintf(out, "# %s: %d entries\n", p.Name, p.TOC.Entries)
 	if _, err := io.Copy(out, dec); err != nil {
 		return err
 	}

@@ -58,7 +58,7 @@ type Options struct {
 	ChainID uint64
 
 	// StateScheme is recorded in the manifest. Empty triggers a fallback
-	// stat-of-<gethDir>/triedb/ heuristic — usable but unreliable (the
+	// stat-of-<gethDir>/triedb/ heuristic: usable but unreliable (the
 	// directory only exists after a graceful PBSS shutdown). Callers that
 	// can determine the scheme authoritatively (e.g. via datadir.Inspect
 	// reading the chaindata's pebble) should populate this explicitly.
@@ -80,7 +80,7 @@ type Options struct {
 
 	// Overwrite allows the upload to proceed when a snapshot with the same
 	// Name already exists at the destination (i.e. its manifest.json is
-	// present). Default behavior is to refuse — re-using a name silently
+	// present). Default behavior is to refuse: re-using a name silently
 	// would replace published bytes that downstream consumers may have
 	// pinned by sha256.
 	Overwrite bool
@@ -100,11 +100,11 @@ type Options struct {
 // Stats captures wall-clock and per-part timings from a single Run.
 // Returned alongside the manifest so the CLI (or any caller) can render
 // a roll-up summary without recomputing the math. Durations are not
-// stored in the manifest itself — they're a property of the operation
+// stored in the manifest itself: they're a property of the operation
 // that produced the snapshot, not of the snapshot.
 type Stats struct {
 	// Elapsed is the total wall-clock from Run entry to manifest commit.
-	// With ParallelParts > 1, this is the outer wall-clock — typically
+	// With ParallelParts > 1, this is the outer wall-clock; typically
 	// less than the sum of PartStats.Elapsed.
 	Elapsed time.Duration
 
@@ -219,13 +219,13 @@ func (o Options) validate() error {
 // the destination, unless the caller opted in via Options.Overwrite.
 //
 // The manifest is the integrity marker for "snapshot exists" (per the
-// design — it's written last, so its absence means an interrupted upload
+// design: it's written last, so its absence means an interrupted upload
 // or no prior snapshot at this name). Re-using a name silently would
 // replace bytes that downstream consumers may have pinned by sha256, so
 // the default is loud refusal.
 //
 // Partial leftover state (parts/ exist but no manifest) is NOT treated as
-// an existing snapshot — those bytes will be overwritten naturally as
+// an existing snapshot; those bytes will be overwritten naturally as
 // the new upload's parts go through their multipart-Put paths.
 func checkOverwrite(ctx context.Context, dst backend.Backend, prefix, name string, overwrite bool) error {
 	if overwrite {
@@ -271,7 +271,7 @@ func preflight(gethDir string, force bool) error {
 // validateAncientLayout enforces that <chaindata>/ancient/ contains only
 // the two known freezer namespaces (chain/ and state/). Any extra entry is
 // a sign of a geth version we don't understand or a bytestream we'd silently
-// drop on the floor — fail fast rather than ship an incomplete snapshot.
+// drop on the floor; fail fast rather than ship an incomplete snapshot.
 //
 // A missing ancient/ directory is fine (e.g. an empty/fresh datadir): the
 // caller's per-part stat checks handle that.
@@ -409,7 +409,7 @@ func planParts(gethDir, prefix string, opts Options) ([]plannedPart, error) {
 // non-nil, returns true for slash-relative paths (relative to root) that
 // should be excluded; returning true on a directory skips the subtree.
 // Tolerates transient permission/IO errors during the walk by skipping
-// the offending entry — appropriate for a best-effort planning pass.
+// the offending entry; appropriate for a best-effort planning pass.
 //
 // The skip predicate here uses paths relative to root, NOT to SrcRoot.
 // That's the same shape tarTree expects, so chaindata-live's
@@ -529,7 +529,7 @@ func uploadPart(ctx context.Context, be backend.Backend, req partRequest) (snaps
 	// Abort by default; only commit (Close) once we've finished writing and
 	// validated everything. Without this, a tar / zstd / fs error mid-stream
 	// would still flush whatever bytes were buffered and CompleteMultipart-
-	// Upload them — committing a corrupt object to the bucket.
+	// Upload them, committing a corrupt object to the bucket.
 	committed := false
 	defer func() {
 		if !committed {
@@ -548,7 +548,7 @@ func uploadPart(ctx context.Context, be backend.Backend, req partRequest) (snaps
 
 	// Progress tracking sits ABOVE zstd so the bytes/sec figure reflects
 	// source throughput (matches the UncompressedTotal denominator and is
-	// what an operator wants to extrapolate — "how long until this 2 TB
+	// what an operator wants to extrapolate, "how long until this 2 TB
 	// part is done"). The tracker hands back an io.Writer that simply
 	// counts; it doesn't consume bytes from the pipeline.
 	var trackerWriter io.Writer = io.Discard
@@ -603,7 +603,7 @@ type tocEntry struct {
 }
 
 // uploadTOC writes a zstd-compressed sidecar next to the part. Each line is
-// "<size> <name>\n" — sortable, grep-able, and `zstd -dc <toc> | head` shows
+// "<size> <name>\n": sortable, grep-able, and `zstd -dc <toc> | head` shows
 // it directly. We use a low compression level (3) and one thread because
 // the input is plain text and tiny (typically <1 MB even for 30K entries).
 func uploadTOC(ctx context.Context, be backend.Backend, req partRequest, entries []tocEntry) (*snapshot.TOCRef, error) {
@@ -657,7 +657,7 @@ func tocPathFor(partPath string) string {
 // rooted at srcSub (so "chaindata/MANIFEST-..." rather than the absolute path).
 // If skip is non-nil, paths for which it returns true are excluded; returning
 // true on a directory skips the entire subtree. If onFile is non-nil, it's
-// invoked once per regular file with the tar entry name and its size — used
+// invoked once per regular file with the tar entry name and its size; used
 // by callers to build a per-part TOC alongside the upload.
 func tarTree(tw *tar.Writer, srcRoot, srcSub string, skip func(rel string) bool, onFile func(name string, size int64)) error {
 	root := filepath.Join(srcRoot, srcSub)
@@ -699,7 +699,7 @@ func tarTree(tw *tar.Writer, srcRoot, srcSub string, skip func(rel string) bool,
 		if d.IsDir() {
 			hdr.Name += "/"
 		}
-		// Strip uid/gid/uname/gname for reproducibility — these vary per host
+		// Strip uid/gid/uname/gname for reproducibility: these vary per host
 		// and aren't load-bearing for geth.
 		hdr.Uid = 0
 		hdr.Gid = 0

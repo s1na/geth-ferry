@@ -13,8 +13,8 @@ const (
 	// PartsDir is the prefix under a snapshot directory where part files live.
 	PartsDir = "parts"
 
-	// ChaindataLivePart holds the live pebble database — every file under
-	// <datadir>/geth/chaindata/ except the ancient/ subtree.
+	// ChaindataLivePart holds the live pebble database (every file under
+	// <datadir>/geth/chaindata/ except the ancient/ subtree).
 	ChaindataLivePart = "parts/chaindata-live.tar.zst"
 
 	// AncientChainPart holds <datadir>/geth/chaindata/ancient/chain/.
@@ -34,11 +34,11 @@ const (
 // geth-<chainid>-<role>-<block>. This is the shape ferry generates when
 // --name isn't supplied.
 //
-// Names are no longer required to match this shape — operators can pass
+// Names are no longer required to match this shape: operators can pass
 // any path-safe string via --name. ParseName is kept as a utility for
 // reading the canonical shape (e.g. when displaying info derived from
 // the name alone), but ferry's source of truth for chain/role/block/
-// created_at is the manifest.json — list fetches it per snapshot.
+// created_at is the manifest.json; list fetches it per snapshot.
 type Name struct {
 	ChainID uint64
 	Role    Role
@@ -54,7 +54,7 @@ func (n Name) String() string {
 // that form and no longer parses it either. Snapshots still carrying
 // the legacy tail in their on-bucket name are reachable via the URL
 // just fine (download/inspect/verify treat names as opaque), but
-// ParseName will return an error on them — fetch the manifest instead.
+// ParseName will return an error on them; fetch the manifest instead.
 var nameRegexp = regexp.MustCompile(`^geth-(\d+)-(archive|full)-(\d+)$`)
 
 // ParseName parses a snapshot name into its components. Returns an error
@@ -90,7 +90,7 @@ var nameSafetyRegexp = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 // ValidateNamePathSafety enforces the minimum constraints ferry needs to
 // use a snapshot name as a path segment: non-empty, no slashes, no URL
 // metacharacters, no whitespace. Stricter validation (the canonical
-// geth-chain-role-block shape) is no longer enforced — operators are
+// geth-chain-role-block shape) is no longer enforced: operators are
 // free to pick whatever fits their pipeline.
 func ValidateNamePathSafety(name string) error {
 	if name == "" {

@@ -38,8 +38,8 @@ func uploadCmd() *cobra.Command {
 			ctx := cmd.Context()
 
 			// Inspect the stopped datadir for chain-id / head / state-scheme.
-			// We try this unconditionally — even when --name / --block /
-			// --chain-id are passed explicitly — because the state-scheme
+			// We try this unconditionally, even when --name / --block /
+			// --chain-id are passed explicitly, because the state-scheme
 			// detection is read authoritatively from the chaindata pebble,
 			// and we want the manifest to record it correctly regardless of
 			// how the other fields were sourced.
@@ -165,7 +165,7 @@ func printUploadSummary(out io.Writer, m *snapshot.Manifest, st *upload.Stats) {
 		totalUncompressed += p.UncompressedSize
 		totalCompressed += p.CompressedSize
 	}
-	fmt.Fprintf(out, "uploaded %s — %d part(s), %s → %s in %s (%s)\n",
+	fmt.Fprintf(out, "uploaded %s: %d part(s), %s → %s in %s (%s)\n",
 		m.Name, len(m.Parts),
 		progress.HumanBytes(totalUncompressed),
 		progress.HumanBytes(totalCompressed),
@@ -189,27 +189,27 @@ func printUploadSummary(out io.Writer, m *snapshot.Manifest, st *upload.Stats) {
 	}
 }
 
-// fmtDuration formats a duration with second precision and an em-dash
+// fmtDuration formats a duration with second precision and a dash
 // fallback for the zero value (which shouldn't happen in practice but
 // guards against degenerate inputs).
 func fmtDuration(d time.Duration) string {
 	if d <= 0 {
-		return "—"
+		return "-"
 	}
 	return d.Round(time.Second).String()
 }
 
 // fmtRate renders bytes-per-second over a duration as "X/s". Returns
-// "—/s" for zero or negative duration.
+// "-/s" for zero or negative duration.
 func fmtRate(bytes int64, d time.Duration) string {
 	if d <= 0 {
-		return "—/s"
+		return "-/s"
 	}
 	return progress.HumanBytes(int64(float64(bytes)/d.Seconds())) + "/s"
 }
 
 // printPlan walks the source tree and prints, per planned part, the file
-// count and uncompressed byte total — without opening the destination
+// count and uncompressed byte total, without opening the destination
 // backend or writing anything. The eventual destination keys are printed
 // for visual confirmation, but the URL is parsed only enough to render
 // them; no network or filesystem state is touched.
@@ -261,7 +261,7 @@ func printPlan(out io.Writer, src, dst, name, role string, block, chainID uint64
 		}
 	}
 
-	// Walk each part's source tree in parallel — metadata-only, IO-bound
+	// Walk each part's source tree in parallel: metadata-only, IO-bound
 	// on the filesystem. On a 350 GB datadir this turns a serial walk
 	// dominated by the live + ancient-chain trees into something closer
 	// to max(live, ancient-chain) wall-clock.
@@ -295,7 +295,7 @@ func printPlan(out io.Writer, src, dst, name, role string, block, chainID uint64
 		level = 5
 	}
 
-	fmt.Fprintf(out, "DRY RUN — no bytes written.\n\n")
+	fmt.Fprintf(out, "DRY RUN: no bytes written.\n\n")
 	fmt.Fprintf(out, "  src           %s\n", src)
 	fmt.Fprintf(out, "  dst           %s\n", dst)
 	fmt.Fprintf(out, "  name          %s\n", name)

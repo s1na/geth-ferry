@@ -35,7 +35,7 @@ type listEntry struct {
 
 // manifestFetchConcurrency bounds how many manifest GETs are in flight
 // at once during `ferry list`. Each manifest is ~2 KiB, so the bottleneck
-// is round-trip latency rather than bandwidth — moderate parallelism is
+// is round-trip latency rather than bandwidth; moderate parallelism is
 // fine even from a workstation.
 const manifestFetchConcurrency = 8
 
@@ -72,7 +72,7 @@ func listCmd() *cobra.Command {
 			defer tw.Flush()
 			fmt.Fprintln(tw, "NAME\tCHAIN\tROLE\tBLOCK\tDATE\tSIZE")
 			for _, e := range entries {
-				// No manifest info → dashes in everything except name + size.
+				// No manifest info: dashes in everything except name + size.
 				if e.Role == "" {
 					fmt.Fprintf(tw, "%s\t-\t-\t-\t-\t%s\n", e.Name, progress.HumanBytes(e.TotalSize))
 					continue

@@ -29,7 +29,7 @@ one full-snapshot-worth of egress per run.
 --quick HEADs each part instead and compares the remote object's size
 against the manifest's compressed_size. Catches "part missing or
 truncated" cheaply (a few kilobytes of metadata per part); does not
-catch silent corruption — only the deep mode does that.`,
+catch silent corruption; only the deep mode does that.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			rootURL, name, err := snapshot.SplitTrailingSegment(src)
@@ -57,7 +57,7 @@ catch silent corruption — only the deep mode does that.`,
 			if quick {
 				mode = "quick"
 			}
-			fmt.Fprintf(out, "verifying %s — %d part(s), %s mode\n", m.Name, len(m.Parts), mode)
+			fmt.Fprintf(out, "verifying %s: %d part(s), %s mode\n", m.Name, len(m.Parts), mode)
 			var failed []string
 			for _, p := range m.Parts {
 				partKey := path.Join(prefix, name, p.Name)

@@ -269,7 +269,7 @@ func TestUploadAcceptsFreeFormName(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("upload with custom name: %v", err)
 	}
-	// Round-trip — proves the name is usable end-to-end, not just at
+	// Round-trip: proves the name is usable end-to-end, not just at
 	// upload-validation time.
 	if _, _, err := download.Run(ctx, be, "", download.Options{
 		DataDir: dstDataDir,
@@ -284,7 +284,7 @@ func TestUploadAcceptsFreeFormName(t *testing.T) {
 }
 
 // TestUploadRejectsUnsafeName confirms that names with path-traversal
-// or URL-meta characters still get rejected — the relaxation isn't a
+// or URL-meta characters still get rejected; the relaxation isn't a
 // blanket "anything goes".
 func TestUploadRejectsUnsafeName(t *testing.T) {
 	tmp := t.TempDir()
@@ -450,7 +450,7 @@ func TestUploadAbortsPartialPartViaUnexpectedAncient(t *testing.T) {
 	bucket := filepath.Join(tmp, "bucket")
 
 	makeFakeDatadir(t, srcDataDir)
-	// Inject a rogue freezer namespace — same trigger as the
+	// Inject a rogue freezer namespace: same trigger as the
 	// existing TestUploadRefusesUnexpectedAncientEntry but we additionally
 	// check that *no* part object leaked into the bucket.
 	mustMkdir(t, filepath.Join(srcDataDir, "geth", "chaindata", "ancient", "logs"))

@@ -35,7 +35,7 @@ func WithMultipartConcurrency(n int) Option {
 
 // Open returns a Backend rooted at the given URL. Backends are dispatched
 // by the URL's scheme. Options unrecognized by the chosen backend are
-// silently ignored — backend-specific options don't need to be guarded
+// silently ignored; backend-specific options don't need to be guarded
 // behind URL-scheme checks at the call site.
 //
 // Implementations register themselves via Register at init time so this

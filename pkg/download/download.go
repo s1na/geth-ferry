@@ -26,7 +26,7 @@ type Options struct {
 	// under <DataDir>/geth/.
 	DataDir string
 
-	// Name is the snapshot identifier — the directory under prefix/.
+	// Name is the snapshot identifier: the directory under prefix/.
 	Name string
 
 	// Force allows extraction into a non-empty <DataDir>/geth/.
@@ -49,7 +49,7 @@ type Options struct {
 // a roll-up summary without recomputing the math.
 type Stats struct {
 	// Elapsed is the total wall-clock from Run entry to atomic promote.
-	// With ParallelParts > 1, this is the outer wall-clock — typically
+	// With ParallelParts > 1, this is the outer wall-clock; typically
 	// less than the sum of PartStats.Elapsed.
 	Elapsed time.Duration
 
@@ -70,7 +70,7 @@ type PartStats struct {
 // <DataDir>/geth/, then renamed into place only after every part has been
 // downloaded and sha256-verified. A failed download leaves no partial
 // state behind. When opts.Force is set and <DataDir>/geth/ already
-// exists, the original is removed only at promote time — a failure
+// exists, the original is removed only at promote time; a failure
 // midway through doesn't damage the existing tree.
 func Run(ctx context.Context, src backend.Backend, prefix string, opts Options) (*snapshot.Manifest, *Stats, error) {
 	runStart := time.Now()

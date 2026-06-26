@@ -7,7 +7,7 @@ import (
 )
 
 // NewLz4Decoder returns a reader that lz4-decompresses from r. lz4 is read-
-// only in ferry — we only support decoding the legacy single-file snapshots.
+// only in ferry: we only support decoding the legacy single-file snapshots.
 //
 // The returned ReadCloser's Close is a no-op; lz4.Reader doesn't hold
 // resources beyond the wrapped reader.
